@@ -18,9 +18,12 @@ const NewsItem: React.FC<NewsItemProps> = ({ article, onTranslateAndRead, isTran
         <h2 className="text-lg font-bold text-nhk-gray dark:text-white mb-3 leading-snug">{article.title}</h2>
         
         {article.translatedTitle && (
-          <div className="mt-4 border-l-4 border-blue-500 pl-4">
-            <h3 className="text-md font-semibold text-blue-800 dark:text-blue-300">English Translation</h3>
-            <p className="text-gray-700 dark:text-gray-300 italic">{article.translatedTitle}</p>
+          <div className="mt-4 border-l-4 border-blue-500 pl-4 bg-blue-50 dark:bg-blue-900/20 p-2 rounded-r-md">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-blue-800 dark:text-blue-300 mb-1">English Translation</h3>
+            <p className="text-md font-semibold text-gray-800 dark:text-gray-200 italic mb-2">{article.translatedTitle}</p>
+            {article.translatedDescription && (
+               <p className="text-sm text-gray-700 dark:text-gray-300">{article.translatedDescription}</p>
+            )}
           </div>
         )}
       </div>

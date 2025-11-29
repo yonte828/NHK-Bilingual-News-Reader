@@ -83,7 +83,7 @@ export const useTextToSpeech = () => {
         await audioContext.resume();
       }
 
-      const audioB64 = await generateSpeech(item.text, item.voice);
+      const audioB64 = item.audioB64 || await generateSpeech(item.text, item.voice);
       const audioBytes = decode(audioB64);
       const audioBuffer = await decodeAudioData(audioBytes, audioContext);
       
