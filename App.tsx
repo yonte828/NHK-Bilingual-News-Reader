@@ -2,11 +2,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import type { NewsArticle, PlaylistItem } from './types';
 import { fetchAndParseRss } from './services/rssService';
-import { translateText, translateArticlesBatch, generateSpeech, generatePodcastAudio } from './services/geminiService';
+import { translateText, translateArticlesBatch, generateSpeech } from './services/geminiService';
 import { useTextToSpeech } from './hooks/useTextToSpeech';
 import NewsItem from './components/NewsItem';
 import PlayerControls from './components/PlayerControls';
-import { LoadingSpinner, ErrorIcon, BrandIcon } from './components/IconComponents';
+import { LoadingSpinner, ErrorIcon, BrandIcon, SettingsIcon, RefreshIcon } from './components/IconComponents';
+import SettingsModal, { USER_API_KEY_STORAGE } from './components/SettingsModal';
 
 const LOCAL_STORAGE_KEY = 'nhk-bilingual-news-articles';
 
@@ -21,7 +22,7 @@ const getInitialArticles = (): NewsArticle[] => {
     }
   } catch (error) {
     console.error("Error reading articles from localStorage:", error);
-    localStorage.removeItem(LOCAL_STORAGE_KEY); // Clear corrupted data
+    localStorage.removeItem(LOCAL_STORAGE_KEY);
   }
   return [];
 };
@@ -35,12 +36,23 @@ const App: React.FC = () => {
   const [isTranslatingAll, setIsTranslatingAll] = useState<boolean>(false);
   const [allTranslated, setAllTranslated] = useState<boolean>(false);
   const [translationProgress, setTranslationProgress] = useState<string>('');
-  // New state to hold the audio chunks for "Play All"
-  const [podcastAudioChunks, setPodcastAudioChunks] = useState<string[] | null>(null);
+  
+  // Settings & API Key State
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [hasApiKey, setHasApiKey] = useState<boolean>(false);
 
   const { play, stop, pause, resume, playbackState, currentItem } = useTextToSpeech();
 
-  // Save articles to localStorage whenever they change
+  // Check for API Key (Strictly check localStorage only)
+  const checkApiKey = useCallback(() => {
+     const userKey = localStorage.getItem(USER_API_KEY_STORAGE);
+     setHasApiKey(!!userKey);
+  }, []);
+
+  useEffect(() => {
+      checkApiKey();
+  }, [checkApiKey]);
+
   useEffect(() => {
     try {
       if (!isLoading && articles.length > 0) {
@@ -51,7 +63,6 @@ const App: React.FC = () => {
     }
   }, [articles, isLoading]);
 
-  // Determine if all articles are translated based on current articles state (Text only)
   useEffect(() => {
     if (articles.length > 0) {
       const isAllDone = articles.every(
@@ -64,7 +75,6 @@ const App: React.FC = () => {
   }, [articles]);
 
   const loadNews = useCallback(async (forceRefresh: boolean = false) => {
-    // If articles exist and we are not forcing a refresh, do nothing.
     if (articles.length > 0 && !forceRefresh) {
         setIsLoading(false);
         return;
@@ -73,21 +83,19 @@ const App: React.FC = () => {
     setIsLoading(true);
     setError(null);
     setAllTranslated(false);
-    setPodcastAudioChunks(null); // Reset podcast audio on reload
     try {
       const newsItems = await fetchAndParseRss();
       setArticles(newsItems);
     } catch (err) {
       console.error(err);
       setError('Failed to fetch or parse the news feed. Please try again later.');
-      setArticles([]); // Clear articles on error
-      localStorage.removeItem(LOCAL_STORAGE_KEY); // Clear storage on error
+      setArticles([]); 
+      localStorage.removeItem(LOCAL_STORAGE_KEY);
     } finally {
       setIsLoading(false);
     }
   }, [articles.length]);
 
-  // Load news on initial mount if no articles are loaded from storage
   useEffect(() => {
     if (articles.length === 0) {
         loadNews();
@@ -96,6 +104,10 @@ const App: React.FC = () => {
   }, []);
 
   const handleTranslateAndRead = async (articleId: string) => {
+    if (!hasApiKey) {
+        setIsSettingsOpen(true);
+        return;
+    }
     if (translatingId || isTranslatingAll) return;
 
     const article = articles.find(a => a.id === articleId);
@@ -107,11 +119,7 @@ const App: React.FC = () => {
     try {
       let translatedTitle = article.translatedTitle;
       let translatedDescription = article.translatedDescription;
-      let translatedTitleAudio = article.translatedTitleAudio;
-      let translatedDescriptionAudio = article.translatedDescriptionAudio;
-      let titleAudio = article.titleAudio;
-      let descriptionAudio = article.descriptionAudio;
-
+      
       // 1. Translate Text if needed
       if (!translatedTitle || !translatedDescription) {
         [translatedTitle, translatedDescription] = await Promise.all([
@@ -120,186 +128,57 @@ const App: React.FC = () => {
         ]);
       }
 
-      // 2. Generate Audio if needed (for both EN and JA to ensure smooth playback)
-      const cleanJaDesc = article.description.replace(/<[^>]*>?/gm, '');
-      
-      if (!translatedTitleAudio) translatedTitleAudio = await generateSpeech(translatedTitle!, 'Kore');
-      if (!translatedDescriptionAudio) translatedDescriptionAudio = await generateSpeech(translatedDescription!, 'Kore');
-      if (!titleAudio) titleAudio = await generateSpeech(article.title, 'Puck');
-      if (!descriptionAudio) descriptionAudio = await generateSpeech(cleanJaDesc, 'Puck');
-
-      // 3. Update State
+      // Update State with text
       setArticles(prevArticles =>
         prevArticles.map(a =>
           a.id === articleId ? { 
             ...a, 
             translatedTitle, 
             translatedDescription,
-            translatedTitleAudio,
-            translatedDescriptionAudio,
-            titleAudio,
-            descriptionAudio
           } : a
         )
       );
       
+      const cleanJaDesc = article.description.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+      
+      // Combine title and description to reduce API calls (2 requests per article instead of 4)
+      const englishText = `${translatedTitle}.\n${translatedDescription}`;
+      const japaneseText = `${article.title}。\n${cleanJaDesc}`;
+
       const playlist: PlaylistItem[] = [
-        { text: translatedTitle!, lang: 'en', voice: 'Kore', audioB64: translatedTitleAudio },
-        { text: article.title, lang: 'ja', voice: 'Puck', audioB64: titleAudio },
-        { text: translatedDescription!, lang: 'en', voice: 'Kore', audioB64: translatedDescriptionAudio },
-        { text: cleanJaDesc, lang: 'ja', voice: 'Puck', audioB64: descriptionAudio },
+        { text: englishText, lang: 'en', voice: 'Kore' },
+        { text: japaneseText, lang: 'ja', voice: 'Puck' },
       ];
 
       play(playlist);
 
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setError(`Failed to process article. Please check your connection and API key.`);
+      if (err.message === "API_KEY_MISSING") {
+          setError("API Key is missing. Please check settings.");
+          setIsSettingsOpen(true);
+      } else {
+          setError(`Failed to process article. Please check your connection.`);
+      }
     } finally {
       setTranslatingId(null);
     }
   };
 
-  const handleTestAudio = async () => {
-      if (isTranslatingAll) return;
-      setIsTranslatingAll(true);
-      setError(null);
-      stop();
-      console.log("🔍 [Debug] Starting Test Audio");
-
-      try {
-          const testScript = `
-EnglishSpeaker
-This is a test of the bilingual news reader system. We are checking if the audio generation works correctly without skipping any parts.
-JapaneseSpeaker
-これはバイリンガルニュースリーダーシステムのテストです。音声生成が部分的にスキップされずに正しく機能しているかを確認しています。
-EnglishSpeaker
-End of test message.
-          `.trim();
-          
-          const audio = await generatePodcastAudio(testScript);
-          console.log("🔍 [Debug] Test Audio Generated. Size:", audio.length);
-
-          const playlist: PlaylistItem[] = [{
-              text: "Audio Test Run",
-              lang: 'en',
-              voice: 'Kore',
-              audioB64: audio
-          }];
-          play(playlist);
-
-      } catch (e) {
-          console.error("❌ [Debug] Test Audio Failed", e);
-          setError("Test Audio Failed.");
-      } finally {
-          setIsTranslatingAll(false);
-      }
-  };
-
-  const generateAudioChunks = async (articlesToProcess: NewsArticle[]) => {
-    // RATE LIMIT FIX: Increase chunk size to 3 to reduce total requests.
-    // Combined with a 6s delay, this keeps us under the 10 RPM limit.
-    const AUDIO_CHUNK_SIZE = 3; 
-    const audioChunks: string[] = [];
-    const totalAudioChunks = Math.ceil(articlesToProcess.length / AUDIO_CHUNK_SIZE);
-
-    for (let i = 0; i < articlesToProcess.length; i += AUDIO_CHUNK_SIZE) {
-        const chunkIndex = Math.floor(i / AUDIO_CHUNK_SIZE) + 1;
-        setTranslationProgress(`Creating audio digest Part ${chunkIndex}/${totalAudioChunks}...`);
-        
-        const chunk = articlesToProcess.slice(i, i + AUDIO_CHUNK_SIZE);
-        
-        // Skip chunks that don't have translations yet (sanity check)
-        const validChunk = chunk.filter(a => a.translatedTitle && a.translatedDescription);
-        
-        if (chunk.length !== validChunk.length) {
-            console.warn(`[Debug] Chunk ${chunkIndex} has skipped items due to missing translation.`, chunk.filter(a => !a.translatedTitle || !a.translatedDescription));
-        }
-
-        if (validChunk.length === 0) continue;
-
-        // Build script strictly to avoid empty turns
-        // UPDATED: Using Newlines instead of "Speaker: Text" to prevent skipping
-        const scriptParts: string[] = [];
-        
-        validChunk.forEach(a => {
-            // Add Title (Required)
-            if (a.translatedTitle) {
-                scriptParts.push(`EnglishSpeaker\n${a.translatedTitle}`);
-            }
-            if (a.title) {
-                scriptParts.push(`JapaneseSpeaker\n${a.title}`);
-            }
-            
-            // Add Description (Optional but common)
-            if (a.translatedDescription && a.translatedDescription.trim() !== '') {
-                scriptParts.push(`EnglishSpeaker\n${a.translatedDescription}`);
-            }
-            
-            // Clean Japanese Description
-            // Remove HTML, collapse spaces, trim
-            let jaDesc = a.description.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
-            if (jaDesc.length > 0) {
-                // Truncate if too long to avoid model confusion/timeout
-                if (jaDesc.length > 150) {
-                    jaDesc = jaDesc.slice(0, 150) + "。";
-                }
-                scriptParts.push(`JapaneseSpeaker\n${jaDesc}`);
-            }
-        });
-
-        const script = scriptParts.join('\n');
-        console.log(`🔍 [Debug] Script for chunk ${chunkIndex} (length: ${script.length}):\n${script}`);
-
-        // RETRY LOGIC for robustness against rate limits
-        const maxRetries = 3;
-        let attempt = 0;
-        let success = false;
-
-        while (attempt < maxRetries && !success) {
-            try {
-                const audioData = await generatePodcastAudio(script);
-                audioChunks.push(audioData);
-                success = true;
-            } catch (err) {
-                attempt++;
-                console.error(`❌ [Debug] Failed to generate audio for chunk ${chunkIndex}, attempt ${attempt}`, err);
-                
-                if (attempt < maxRetries) {
-                    setTranslationProgress(`Retrying Part ${chunkIndex}... (Attempt ${attempt}/${maxRetries})`);
-                    // Wait 10 seconds before retry to let the rate limit bucket refill
-                    await new Promise(r => setTimeout(r, 10000));
-                } else {
-                     console.error(`❌ [Debug] Gave up on chunk ${chunkIndex} after ${maxRetries} attempts.`);
-                     // We continue to next chunk even if one fails, to not break everything
-                }
-            }
-        }
-        
-        // RATE LIMIT FIX: 6000ms delay ensures we stay under 10 RPM.
-        // 60s / 6s = 10 requests per minute max.
-        if (i + AUDIO_CHUNK_SIZE < articlesToProcess.length) {
-            setTranslationProgress(`Cooling down API (Part ${chunkIndex}/${totalAudioChunks})...`);
-            await new Promise(r => setTimeout(r, 6000));
-        }
-    }
-    return audioChunks;
-  };
-
   const handleTranslateAll = async () => {
+    if (!hasApiKey) {
+        setIsSettingsOpen(true);
+        return;
+    }
     if (isTranslatingAll) return;
     setIsTranslatingAll(true);
     setError(null);
     stop();
   
-    console.log("🔍 [Debug] Start handleTranslateAll");
-
     try {
       // 1. Translate Text First (Batched)
       const articlesToProcess = articles.filter(a => !a.translatedTitle || !a.translatedDescription);
-      console.log(`🔍 [Debug] Articles needing translation: ${articlesToProcess.length}`);
       
-      // Use a local copy to accumulate changes
       let localArticles = [...articles];
       
       if (articlesToProcess.length > 0) {
@@ -308,12 +187,10 @@ End of test message.
 
         for (let i = 0; i < articlesToProcess.length; i += TEXT_CHUNK_SIZE) {
             const chunkIndex = Math.floor(i / TEXT_CHUNK_SIZE) + 1;
-            console.log(`🔍 [Debug] Processing text chunk ${chunkIndex}/${totalChunks}`);
             setTranslationProgress(`Translating text ${chunkIndex}/${totalChunks}...`);
             
             const chunk = articlesToProcess.slice(i, i + TEXT_CHUNK_SIZE);
             const translatedData = await translateArticlesBatch(chunk);
-            console.log(`🔍 [Debug] Received data from API for chunk ${chunkIndex}`, translatedData);
 
             // Update local cache
             translatedData.forEach(tItem => {
@@ -326,8 +203,22 @@ End of test message.
                     };
                 }
             });
+
+            // --- Pre-generate Audio for First Article ---
+            if (i === 0 && localArticles.length > 0) {
+                const first = localArticles[0];
+                if (first.translatedTitle && first.translatedDescription) {
+                    const cleanJaDesc = first.description.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+                    const englishText = `${first.translatedTitle}.\n${first.translatedDescription}`;
+                    const japaneseText = `${first.title}。\n${cleanJaDesc}`;
+                    
+                    console.log(`[App] Pre-generating audio for article "${first.title.substring(0,10)}..." to enable instant playback.`);
+                    // Fire and forget (Token bucket will handle burst)
+                    generateSpeech(englishText, 'Kore', 'en').catch(e => console.warn("Pre-gen en failed", e));
+                    generateSpeech(japaneseText, 'Puck', 'ja').catch(e => console.warn("Pre-gen ja failed", e));
+                }
+            }
             
-            // Also update UI incrementally
             setArticles([...localArticles]);
             
             if (i + TEXT_CHUNK_SIZE < articlesToProcess.length) {
@@ -335,78 +226,56 @@ End of test message.
             }
         }
       }
-
-      // 2. Generate Podcast Audio in Chunks
-      console.log("🔍 [Debug] Starting Audio Generation Phase");
-      const chunks = await generateAudioChunks(localArticles);
-      setPodcastAudioChunks(chunks);
       
-      console.log(`🔍 [Debug] Generated ${chunks.length} audio chunks successfully.`);
-      
-    } catch (e) {
-      console.error(`❌ [Debug] Error in handleTranslateAll`, e);
-      setError("Failed to complete process. Please try again.");
+    } catch (e: any) {
+      console.error(`Error in handleTranslateAll`, e);
+      if (e.message === "API_KEY_MISSING") {
+          setError("API Key is missing. Please check settings.");
+          setIsSettingsOpen(true);
+      } else {
+          setError("Failed to complete translation.");
+      }
     } finally {
       setIsTranslatingAll(false);
       setTranslationProgress('');
-      console.log("🔍 [Debug] Finished handleTranslateAll");
     }
   };
 
 
   const handlePlayAll = async () => {
-    stop();
-    console.log("🔍 [Debug] Play All clicked");
-    
-    // If we have the podcast audio ready, play it.
-    if (podcastAudioChunks && podcastAudioChunks.length > 0) {
-        console.log("🔍 [Debug] Podcast audio exists, playing playlist.");
-        const playlist = podcastAudioChunks.map((audio, index) => ({
-            text: `News Digest Part ${index + 1}`,
-            lang: 'en' as const,
-            voice: 'Kore' as const,
-            audioB64: audio
-        }));
-        play(playlist);
+    if (!hasApiKey) {
+        setIsSettingsOpen(true);
         return;
     }
-
-    // If not ready, we need to generate it.
-    console.log("🔍 [Debug] Audio missing. Checking if text needs translation...");
+    stop();
     
-    // Check if we need text translation first
     const untranslated = articles.some(a => !a.translatedTitle);
     
     if (untranslated) {
-        // If text is missing, redirect to Translate All logic effectively
-        console.log("🔍 [Debug] Untranslated text found. Running full translate process.");
         await handleTranslateAll();
+    }
+
+    // Build Playlist
+    const playlist: PlaylistItem[] = [];
+    
+    articles.forEach(a => {
+        if (!a.translatedTitle) return;
+
+        const cleanJaDesc = a.description.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+        
+        const englishText = `${a.translatedTitle}.\n${a.translatedDescription || ''}`;
+        const japaneseText = `${a.title}。\n${cleanJaDesc}`;
+        
+        playlist.push({ text: englishText, lang: 'en', voice: 'Kore' });
+        playlist.push({ text: japaneseText, lang: 'ja', voice: 'Puck' });
+    });
+
+    if (playlist.length === 0) {
+        setError("No translated articles available to play.");
         return;
     }
 
-    // All translated but audio missing (e.g. page reload or cleared)
-    console.log("🔍 [Debug] All translated. Generating audio digest...");
-    setIsTranslatingAll(true);
-    
-    try {
-        const chunks = await generateAudioChunks(articles);
-        setPodcastAudioChunks(chunks);
-        
-        const playlist = chunks.map((audio, index) => ({
-            text: `News Digest Part ${index + 1}`,
-            lang: 'en' as const,
-            voice: 'Kore' as const,
-            audioB64: audio
-        }));
-        play(playlist);
-
-    } catch(e) {
-         console.error("❌ [Debug] Error generating audio", e);
-        setError("Failed to generate audio.");
-    } finally {
-        setIsTranslatingAll(false);
-        setTranslationProgress('');
-    }
+    play(playlist);
   };
 
 
@@ -419,11 +288,18 @@ End of test message.
             <h1 className="text-xl sm:text-2xl font-bold hidden sm:block">NHK Bilingual News Reader</h1>
           </div>
           <div className="flex items-center space-x-2 sm:space-x-3">
+             <button
+              onClick={() => setIsSettingsOpen(true)}
+              className="p-2 rounded-full hover:bg-white/20 transition-colors"
+              aria-label="Settings"
+            >
+              <SettingsIcon className="h-6 w-6" />
+            </button>
             <button
               onClick={handleTranslateAll}
-              disabled={isLoading || articles.length === 0 || isTranslatingAll || (allTranslated && !!podcastAudioChunks)}
-              className="flex items-center justify-center px-3 py-2 bg-white/10 text-white font-semibold rounded-md hover:bg-white/20 transition-colors disabled:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50 min-w-[140px]"
-              title="Translate and generate audio for all articles"
+              disabled={isLoading || articles.length === 0 || isTranslatingAll || allTranslated}
+              className={`flex items-center justify-center px-3 py-2 bg-white/10 text-white font-semibold rounded-md hover:bg-white/20 transition-colors disabled:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50 min-w-[140px] ${!hasApiKey ? 'opacity-50 cursor-not-allowed' : ''}`}
+              title="Translate all articles"
             >
               {isTranslatingAll ? (
                   <div className="flex items-center">
@@ -431,25 +307,16 @@ End of test message.
                       <span className="text-xs sm:text-sm whitespace-nowrap">{translationProgress || 'Processing'}</span>
                   </div>
               ) : (
-                <span>{(allTranslated && podcastAudioChunks) ? 'All Ready' : 'Translate All'}</span>
+                <span>{allTranslated ? 'Translated' : 'Translate All'}</span>
               )}
             </button>
             <button
               onClick={handlePlayAll}
               disabled={articles.length === 0 || isTranslatingAll}
-              className="flex items-center justify-center px-3 py-2 bg-white/10 text-white font-semibold rounded-md hover:bg-white/20 transition-colors disabled:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
+              className={`flex items-center justify-center px-3 py-2 bg-white/10 text-white font-semibold rounded-md hover:bg-white/20 transition-colors disabled:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed ${!hasApiKey ? 'opacity-50 cursor-not-allowed' : ''}`}
               title="Play all translated articles"
             >
               <span>Play All</span>
-            </button>
-            
-            <button
-              onClick={handleTestAudio}
-              disabled={isTranslatingAll}
-              className="flex items-center justify-center px-3 py-2 bg-yellow-500/20 text-yellow-100 font-semibold rounded-md hover:bg-yellow-500/30 transition-colors disabled:opacity-50 text-sm border border-yellow-500/50"
-              title="Run a quick audio test"
-            >
-              Test
             </button>
 
             <button
@@ -458,15 +325,17 @@ End of test message.
               className="p-2 rounded-full hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               aria-label="Refresh News"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" className={`h-6 w-6 ${isLoading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h5M20 20v-5h-5M20 4h-5v5M4 20h5v-5M12 4V2M12 22v-2M4 12H2M22 12h-2" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15a3 3 0 100-6 3 3 0 000 6z" transform="rotate(-45 12 12)" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15a3 3 0 100-6 3 3 0 000 6z" transform="rotate(45 12 12)" />
-              </svg>
+              <RefreshIcon className={`h-6 w-6 ${isLoading ? 'animate-spin' : ''}`} />
             </button>
           </div>
         </div>
       </header>
+      
+      {!hasApiKey && !isLoading && (
+        <div className="bg-yellow-100 dark:bg-yellow-900/40 p-3 text-center text-yellow-800 dark:text-yellow-200 text-sm font-medium">
+          Please set your Gemini API Key in <button onClick={() => setIsSettingsOpen(true)} className="underline hover:text-yellow-900 dark:hover:text-white font-bold">Settings</button> to enable translation and audio.
+        </div>
+      )}
       
       <main className="container mx-auto p-4 sm:p-6 lg:p-8 pb-32">
         {isLoading && (
@@ -496,7 +365,7 @@ End of test message.
                 article={article}
                 onTranslateAndRead={handleTranslateAndRead}
                 isTranslating={translatingId === article.id}
-                isReading={(currentItem?.text === article.translatedTitle || currentItem?.text === article.title) && !podcastAudioChunks}
+                isReading={(currentItem?.text.includes(article.translatedTitle || '') || currentItem?.text.includes(article.title)) && isTranslatingAll === false}
               />
             ))}
           </div>
@@ -511,6 +380,12 @@ End of test message.
           onStop={stop}
         />
       )}
+      
+      <SettingsModal 
+        isOpen={isSettingsOpen} 
+        onClose={() => setIsSettingsOpen(false)} 
+        onSave={checkApiKey}
+      />
     </div>
   );
 };

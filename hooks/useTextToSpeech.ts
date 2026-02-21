@@ -1,5 +1,5 @@
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import type { PlaybackState, PlaylistItem } from '../types';
 import { generateSpeech } from '../services/geminiService';
 
@@ -40,6 +40,11 @@ export const useTextToSpeech = () => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
+  
+  // Cache for generated audio: key = index in playlist, value = base64 string
+  const audioCacheRef = useRef<Map<number, string>>(new Map());
+  // Cache for in-flight promises: key = index in playlist
+  const promiseCacheRef = useRef<Map<number, Promise<string>>>(new Map());
 
   const initAudioContext = useCallback(() => {
     if (!audioContextRef.current) {
@@ -63,12 +68,77 @@ export const useTextToSpeech = () => {
     setCurrentItem(undefined);
     playlistRef.current = [];
     currentItemIndexRef.current = 0;
+    // We keep caches on stop so re-playing is instant, but in a real app might want to clear eventually
   }, []);
+
+  // Function to fetch audio for a specific item index (with caching and promise deduplication)
+  const fetchAudioForItem = useCallback(async (index: number): Promise<string> => {
+      if (index < 0 || index >= playlistRef.current.length) return "";
+      
+      // 1. Check if we have the result already
+      if (audioCacheRef.current.has(index)) {
+          return audioCacheRef.current.get(index)!;
+      }
+      
+      // 2. Check if there is already a request pending for this index
+      if (promiseCacheRef.current.has(index)) {
+          console.log(`[Playback] Joining existing request for item ${index}`);
+          return promiseCacheRef.current.get(index)!;
+      }
+
+      const item = playlistRef.current[index];
+      // 3. Check if item has pre-calculated audio (rare in this flow but possible)
+      if (item.audioB64) {
+          audioCacheRef.current.set(index, item.audioB64);
+          return item.audioB64;
+      }
+
+      // 4. Create new request
+      console.log(`[Playback] Starting new request for item ${index}`);
+      const promise = generateSpeech(item.text, item.voice, item.lang)
+          .then(audioB64 => {
+              // On success, move to data cache and remove from promise cache
+              audioCacheRef.current.set(index, audioB64);
+              promiseCacheRef.current.delete(index);
+              return audioB64;
+          })
+          .catch(e => {
+              // On error, remove from promise cache so we can try again later
+              promiseCacheRef.current.delete(index);
+              throw e;
+          });
+
+      promiseCacheRef.current.set(index, promise);
+      return promise;
+  }, []);
+
+  // Trigger prefetching for the NEXT items
+  const prefetchNext = useCallback((currentIndex: number) => {
+      // Prefetch the next 3 items to ensure the pipeline is full
+      // Increased from 2 to 3 to keep the queue busier given the 5.5s delay
+      const itemsToPrefetch = [currentIndex + 1, currentIndex + 2, currentIndex + 3];
+      
+      itemsToPrefetch.forEach(nextIndex => {
+        if (nextIndex < playlistRef.current.length) {
+            // Only fetch if not already cached and not currently being fetched
+            if (!audioCacheRef.current.has(nextIndex) && !promiseCacheRef.current.has(nextIndex)) {
+                console.log(`[Playback] Queueing prefetch for item ${nextIndex}`);
+                // Fire and forget (it joins the rate-limited queue)
+                fetchAudioForItem(nextIndex).catch(e => console.warn(`Prefetch failed for ${nextIndex}`, e));
+            }
+        }
+      });
+  }, [fetchAudioForItem]);
 
   const playTrack = useCallback(async (index: number) => {
     if (index >= playlistRef.current.length) {
       stop();
       return;
+    }
+
+    // Clean up old cache to save memory (keep previous one just in case of quick prev/next)
+    if (index > 2) {
+        audioCacheRef.current.delete(index - 3);
     }
 
     currentItemIndexRef.current = index;
@@ -83,7 +153,12 @@ export const useTextToSpeech = () => {
         await audioContext.resume();
       }
 
-      const audioB64 = item.audioB64 || await generateSpeech(item.text, item.voice);
+      // Fire prefetch logic immediately
+      prefetchNext(index);
+
+      // Fetch current item (awaits the same promise if prefetch already started it)
+      const audioB64 = await fetchAudioForItem(index);
+      
       const audioBytes = decode(audioB64);
       const audioBuffer = await decodeAudioData(audioBytes, audioContext);
       
@@ -101,6 +176,7 @@ export const useTextToSpeech = () => {
       sourceNode.onended = () => {
         if (sourceNodeRef.current === sourceNode) {
           sourceNodeRef.current = null;
+          // Loop to next track
           playTrack(currentItemIndexRef.current + 1);
         }
       };
@@ -109,15 +185,19 @@ export const useTextToSpeech = () => {
       setPlaybackState('playing');
     } catch (error) {
       console.error(`Error during playback for item "${item.text.substring(0, 30)}...". Skipping.`, error);
-      // Don't stop the whole playlist. Just skip to the next track.
+      // Skip to next on error
       playTrack(index + 1);
     }
-  }, [stop, initAudioContext]);
+  }, [stop, initAudioContext, fetchAudioForItem, prefetchNext]);
 
   const play = useCallback((items: PlaylistItem[]) => {
     if (!items || items.length === 0) return;
     stop();
     
+    // Clear caches on new playlist start
+    audioCacheRef.current.clear();
+    promiseCacheRef.current.clear();
+
     setTimeout(() => {
         playlistRef.current = items;
         currentItemIndexRef.current = 0;
