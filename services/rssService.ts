@@ -1,15 +1,13 @@
 import type { NewsArticle } from '../types';
 
-const RSS_URL = 'https://www3.nhk.or.jp/rss/news/cat0.xml';
-// Switched to a different CORS proxy that is generally more reliable.
-const CORS_PROXY = 'https://cors.eu.org/';
+// Using internal server-side proxy to avoid CORS issues
+const RSS_API_URL = '/api/news-rss';
 
 export const fetchAndParseRss = async (): Promise<NewsArticle[]> => {
-  // This proxy doesn't require URL encoding the target URL.
-  const response = await fetch(`${CORS_PROXY}${RSS_URL}`);
+  const response = await fetch(RSS_API_URL);
   
   if (!response.ok) {
-    throw new Error(`Failed to fetch RSS feed: ${response.statusText}`);
+    throw new Error(`Failed to fetch RSS feed from proxy: ${response.statusText}`);
   }
 
   const xmlText = await response.text();

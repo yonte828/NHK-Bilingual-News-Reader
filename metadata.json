@@ -1,5 +1,6 @@
 {
   "name": "NHK News Reader",
   "description": "An application that fetches the latest NHK news from an RSS feed, translates it from Japanese to English, and reads both versions aloud using Gemini API.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": []
 }

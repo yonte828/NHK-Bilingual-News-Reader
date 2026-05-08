@@ -18,7 +18,7 @@ export const translateText = async (text: string): Promise<string> => {
     try {
         const aiInstance = getAi();
         const response = await aiInstance.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: 'gemini-3-flash-preview',
             contents: `Translate to English. Keep it concise. No preamble.\n\nText: "${text}"`,
         });
         return response.text || "";
@@ -42,7 +42,7 @@ export const translateArticlesBatch = async (articles: NewsArticle[]): Promise<{
         }));
 
         const response = await aiInstance.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: 'gemini-3-flash-preview',
             contents: JSON.stringify(itemsToTranslate),
             config: {
                 systemInstruction: "Translate Japanese news titles (t) and descriptions (d) to English. Return JSON array with keys: id, translatedTitle, translatedDescription.",
@@ -178,7 +178,7 @@ export const generateSpeech = async (text: string, voice: 'Kore' | 'Puck', lang:
                     : "Read this text in English:\n";
                 
                 const response = await aiInstance.models.generateContent({
-                    model: "gemini-2.5-flash-preview-tts",
+                    model: "gemini-3.1-flash-tts-preview",
                     contents: [{ parts: [{ text: promptPrefix + text }] }],
                     config: {
                         responseModalities: [Modality.AUDIO],
