@@ -1,10 +1,6 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
@@ -12,14 +8,16 @@ async function startServer() {
 
   // RSS Proxy endpoint
   app.get('/api/news-rss', async (req, res) => {
-    const RSS_URL = 'https://www3.nhk.or.jp/rss/news/cat0.xml';
+    // NHK's RSS has stopped updating since Aug 8, so we're using Yahoo News RSS instead
+    const RSS_URL = 'https://news.yahoo.co.jp/rss/topics/top-picks.xml';
     try {
-      const response = await fetch(RSS_URL);
+      const response = await fetch(`${RSS_URL}?t=${Date.now()}`, { cache: 'no-store' });
       if (!response.ok) {
-        throw new Error(`NHK RSS returned ${response.status}`);
+        throw new Error(`RSS feed returned ${response.status}`);
       }
       const data = await response.text();
       res.set('Content-Type', 'application/xml');
+      res.set('Cache-Control', 'no-store');
       res.send(data);
     } catch (error) {
       console.error('Error fetching RSS:', error);

@@ -1,14 +1,15 @@
 export default async function handler(req: any, res: any) {
-  const RSS_URL = 'https://www3.nhk.or.jp/rss/news/cat0.xml';
+  // NHK's RSS has stopped updating since Aug 8, so we're using Yahoo News RSS instead
+  const RSS_URL = 'https://news.yahoo.co.jp/rss/topics/top-picks.xml';
   try {
-    const response = await fetch(RSS_URL);
+    const response = await fetch(`${RSS_URL}?t=${Date.now()}`, { cache: 'no-store' });
     if (!response.ok) {
-      throw new Error(`NHK RSS returned ${response.status}`);
+      throw new Error(`RSS feed returned ${response.status}`);
     }
     const data = await response.text();
     
-    // キャッシュを有効にしてVercel上でのパフォーマンスを向上
-    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate');
+    // API Route (Vercel Edge/Serverless) cache settings
+    res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'application/xml; charset=utf-8');
     res.status(200).send(data);
   } catch (error) {

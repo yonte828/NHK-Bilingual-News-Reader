@@ -4,7 +4,7 @@ import type { NewsArticle } from '../types';
 const RSS_API_URL = '/api/news-rss';
 
 export const fetchAndParseRss = async (): Promise<NewsArticle[]> => {
-  const response = await fetch(RSS_API_URL);
+  const response = await fetch(`${RSS_API_URL}?t=${Date.now()}`, { cache: 'no-store' });
   
   if (!response.ok) {
     throw new Error(`Failed to fetch RSS feed from proxy: ${response.statusText}`);

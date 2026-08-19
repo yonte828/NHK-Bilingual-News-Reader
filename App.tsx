@@ -82,24 +82,38 @@ const App: React.FC = () => {
 
     setIsLoading(true);
     setError(null);
-    setAllTranslated(false);
     try {
       const newsItems = await fetchAndParseRss();
-      setArticles(newsItems);
+      setArticles(prevArticles => {
+        return newsItems.map(newItem => {
+          const existingItem = prevArticles.find(a => a.id === newItem.id);
+          if (existingItem) {
+            return {
+              ...newItem,
+              translatedTitle: existingItem.translatedTitle,
+              translatedDescription: existingItem.translatedDescription
+            };
+          }
+          return newItem;
+        });
+      });
     } catch (err) {
       console.error(err);
       setError('Failed to fetch or parse the news feed. Please try again later.');
-      setArticles([]); 
-      localStorage.removeItem(LOCAL_STORAGE_KEY);
+      setArticles(prev => {
+        if (prev.length === 0) {
+          localStorage.removeItem(LOCAL_STORAGE_KEY);
+        }
+        return prev;
+      });
     } finally {
       setIsLoading(false);
     }
   }, [articles.length]);
 
   useEffect(() => {
-    if (articles.length === 0) {
-        loadNews();
-    }
+    // Always fetch latest news on mount, keeping existing articles while loading
+    loadNews(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -281,11 +295,11 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-nhk-gray transition-colors duration-500">
-      <header className="bg-nhk-red text-white shadow-lg sticky top-0 z-20">
+      <header className="bg-red-600 text-white shadow-lg sticky top-0 z-20">
         <div className="container mx-auto px-4 py-3 flex justify-between items-center">
           <div className="flex items-center space-x-3">
             <BrandIcon />
-            <h1 className="text-xl sm:text-2xl font-bold hidden sm:block">NHK Bilingual News Reader</h1>
+            <h1 className="text-xl sm:text-2xl font-bold hidden sm:block">Japan Bilingual News Reader</h1>
           </div>
           <div className="flex items-center space-x-2 sm:space-x-3">
              <button
@@ -338,15 +352,15 @@ const App: React.FC = () => {
       )}
       
       <main className="container mx-auto p-4 sm:p-6 lg:p-8 pb-32">
-        {isLoading && (
+        {isLoading && articles.length === 0 && (
           <div className="flex flex-col items-center justify-center h-64 text-gray-500 dark:text-gray-400">
             <LoadingSpinner className="h-12 w-12" />
-            <p className="mt-4 text-lg">Fetching latest news from NHK...</p>
+            <p className="mt-4 text-lg">Fetching latest news...</p>
           </div>
         )}
 
         {error && (
-          <div className="bg-red-100 dark:bg-red-900/50 border-l-4 border-red-500 text-red-700 dark:text-red-200 p-4 rounded-md shadow-md" role="alert">
+          <div className="bg-red-100 dark:bg-red-900/50 border-l-4 border-red-500 text-red-700 dark:text-red-200 p-4 rounded-md shadow-md mb-6" role="alert">
             <div className="flex items-center">
               <ErrorIcon />
               <div className="ml-3">
@@ -357,7 +371,7 @@ const App: React.FC = () => {
           </div>
         )}
         
-        {!isLoading && !error && (
+        {articles.length > 0 && (
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             {articles.map((article) => (
               <NewsItem 
