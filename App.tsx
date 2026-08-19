@@ -295,11 +295,11 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-nhk-gray transition-colors duration-500">
-      <header className="bg-red-600 text-white shadow-lg sticky top-0 z-20">
+      <header className="bg-nhk-red text-white shadow-lg sticky top-0 z-20">
         <div className="container mx-auto px-4 py-3 flex justify-between items-center">
           <div className="flex items-center space-x-3">
             <BrandIcon />
-            <h1 className="text-xl sm:text-2xl font-bold hidden sm:block">Japan Bilingual News Reader</h1>
+            <h1 className="text-xl sm:text-2xl font-bold hidden sm:block">NHK Bilingual News Reader</h1>
           </div>
           <div className="flex items-center space-x-2 sm:space-x-3">
              <button
@@ -355,7 +355,7 @@ const App: React.FC = () => {
         {isLoading && articles.length === 0 && (
           <div className="flex flex-col items-center justify-center h-64 text-gray-500 dark:text-gray-400">
             <LoadingSpinner className="h-12 w-12" />
-            <p className="mt-4 text-lg">Fetching latest news...</p>
+            <p className="mt-4 text-lg">Fetching latest news from NHK...</p>
           </div>
         )}
 

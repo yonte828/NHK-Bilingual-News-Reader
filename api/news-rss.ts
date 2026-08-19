@@ -1,6 +1,6 @@
 export default async function handler(req: any, res: any) {
-  // NHK's RSS has stopped updating since Aug 8, so we're using Yahoo News RSS instead
-  const RSS_URL = 'https://news.yahoo.co.jp/rss/topics/top-picks.xml';
+  // Using the new NHK RSS feed URL
+  const RSS_URL = 'https://news.web.nhk/n-data/conf/na/rss/cat0.xml';
   try {
     const response = await fetch(`${RSS_URL}?t=${Date.now()}`, { cache: 'no-store' });
     if (!response.ok) {
