@@ -19,7 +19,7 @@ export const translateText = async (text: string): Promise<string> => {
         const aiInstance = getAi();
         const response = await aiInstance.models.generateContent({
             model: 'gemini-3-flash-preview',
-            contents: `Translate to English. Keep it concise. No preamble.\n\nText: "${text}"`,
+            contents: `Translate to Japanese. Keep it concise. No preamble.\n\nText: "${text}"`,
         });
         return response.text || "";
     } catch (error: any) {
@@ -45,7 +45,7 @@ export const translateArticlesBatch = async (articles: NewsArticle[]): Promise<{
             model: 'gemini-3-flash-preview',
             contents: JSON.stringify(itemsToTranslate),
             config: {
-                systemInstruction: "Translate Japanese news titles (t) and descriptions (d) to English. Return JSON array with keys: id, translatedTitle, translatedDescription.",
+                systemInstruction: "You are an expert news editor and translator. You are given a list of English news titles (t) and descriptions (d). Your task is to translate the English title and description into natural Japanese. Return a JSON array with keys: id, translatedTitle, translatedDescription.",
                 responseMimeType: "application/json",
                 responseSchema: {
                     type: Type.ARRAY,

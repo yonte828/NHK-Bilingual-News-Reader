@@ -136,10 +136,13 @@ const App: React.FC = () => {
       
       // 1. Translate Text if needed
       if (!translatedTitle || !translatedDescription) {
-        [translatedTitle, translatedDescription] = await Promise.all([
-          translateText(article.title),
-          translateText(article.description)
-        ]);
+        const translatedData = await translateArticlesBatch([article]);
+        if (translatedData.length > 0) {
+            translatedTitle = translatedData[0].translatedTitle;
+            translatedDescription = translatedData[0].translatedDescription;
+        } else {
+            throw new Error("Translation failed.");
+        }
       }
 
       // Update State with text
@@ -148,16 +151,16 @@ const App: React.FC = () => {
           a.id === articleId ? { 
             ...a, 
             translatedTitle, 
-            translatedDescription,
+            translatedDescription
           } : a
         )
       );
       
-      const cleanJaDesc = article.description.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+      const cleanEnDesc = article.description.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
       
       // Combine title and description to reduce API calls (2 requests per article instead of 4)
-      const englishText = `${translatedTitle}.\n${translatedDescription}`;
-      const japaneseText = `${article.title}。\n${cleanJaDesc}`;
+      const englishText = `${article.title}.\n${cleanEnDesc}`;
+      const japaneseText = `${translatedTitle}。\n${translatedDescription}`;
 
       const playlist: PlaylistItem[] = [
         { text: englishText, lang: 'en', voice: 'Kore' },
@@ -222,9 +225,9 @@ const App: React.FC = () => {
             if (i === 0 && localArticles.length > 0) {
                 const first = localArticles[0];
                 if (first.translatedTitle && first.translatedDescription) {
-                    const cleanJaDesc = first.description.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
-                    const englishText = `${first.translatedTitle}.\n${first.translatedDescription}`;
-                    const japaneseText = `${first.title}。\n${cleanJaDesc}`;
+                    const cleanEnDesc = first.description.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+                    const englishText = `${first.title}.\n${cleanEnDesc}`;
+                    const japaneseText = `${first.translatedTitle}。\n${first.translatedDescription}`;
                     
                     console.log(`[App] Pre-generating audio for article "${first.title.substring(0,10)}..." to enable instant playback.`);
                     // Fire and forget (Token bucket will handle burst)
@@ -272,16 +275,15 @@ const App: React.FC = () => {
     // Build Playlist
     const playlist: PlaylistItem[] = [];
     
-    articles.forEach(a => {
+        articles.forEach(a => {
         if (!a.translatedTitle) return;
-
-        const cleanJaDesc = a.description.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+        const cleanEnDesc = a.description.replace(/<[^>]*>?/gm, "").replace(/\s+/g, " ").trim();
         
-        const englishText = `${a.translatedTitle}.\n${a.translatedDescription || ''}`;
-        const japaneseText = `${a.title}。\n${cleanJaDesc}`;
+        const englishText = `${a.title}.\n${cleanEnDesc}`;
+        const japaneseText = `${a.translatedTitle}。\n${a.translatedDescription || ""}`;
         
-        playlist.push({ text: englishText, lang: 'en', voice: 'Kore' });
-        playlist.push({ text: japaneseText, lang: 'ja', voice: 'Puck' });
+        playlist.push({ text: englishText, lang: "en", voice: "Kore" });
+        playlist.push({ text: japaneseText, lang: "ja", voice: "Puck" });
     });
 
     if (playlist.length === 0) {
@@ -299,7 +301,7 @@ const App: React.FC = () => {
         <div className="container mx-auto px-4 py-3 flex justify-between items-center">
           <div className="flex items-center space-x-3">
             <BrandIcon />
-            <h1 className="text-xl sm:text-2xl font-bold hidden sm:block">NHK Bilingual News Reader</h1>
+            <h1 className="text-xl sm:text-2xl font-bold hidden sm:block">Japan Times Bilingual News Reader</h1>
           </div>
           <div className="flex items-center space-x-2 sm:space-x-3">
              <button
@@ -355,7 +357,7 @@ const App: React.FC = () => {
         {isLoading && articles.length === 0 && (
           <div className="flex flex-col items-center justify-center h-64 text-gray-500 dark:text-gray-400">
             <LoadingSpinner className="h-12 w-12" />
-            <p className="mt-4 text-lg">Fetching latest news from NHK...</p>
+            <p className="mt-4 text-lg">Fetching latest news from Japan Times...</p>
           </div>
         )}
 

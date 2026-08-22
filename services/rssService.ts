@@ -24,15 +24,7 @@ export const fetchAndParseRss = async (): Promise<NewsArticle[]> => {
   return items.map(item => {
     const title = item.querySelector('title')?.textContent || '';
     const link = item.querySelector('link')?.textContent || '';
-    let description = item.querySelector('description')?.textContent || '';
-    
-    // Clean up HTML tags and normalize whitespace
-    description = description
-        .replace(/<!\[CDATA\[(.*?)\]\]>/g, '$1') // Remove CDATA if present
-        .replace(/<[^>]*>?/gm, ' ') // Strip remaining HTML tags
-        .replace(/\s+/g, ' ')       // Normalize whitespace
-        .trim();
-
+    const description = item.querySelector('description')?.textContent || '';
     const pubDate = item.querySelector('pubDate')?.textContent || '';
     const guid = item.querySelector('guid')?.textContent || link || title;
 

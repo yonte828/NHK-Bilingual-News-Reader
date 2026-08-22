@@ -8,8 +8,8 @@ async function startServer() {
 
   // RSS Proxy endpoint
   app.get('/api/news-rss', async (req, res) => {
-    // Using the new NHK RSS feed URL
-    const RSS_URL = 'https://news.web.nhk/n-data/conf/na/rss/cat0.xml';
+    // Using the Japan Times RSS feed URL
+    const RSS_URL = 'https://www.japantimes.co.jp/feed/';
     try {
       const response = await fetch(`${RSS_URL}?t=${Date.now()}`, { cache: 'no-store' });
       if (!response.ok) {
@@ -28,7 +28,7 @@ async function startServer() {
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: false },
       appType: 'spa',
     });
     app.use(vite.middlewares);
