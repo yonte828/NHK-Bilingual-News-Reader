@@ -9,10 +9,14 @@ import PlayerControls from './components/PlayerControls';
 import { LoadingSpinner, ErrorIcon, BrandIcon, SettingsIcon, RefreshIcon } from './components/IconComponents';
 import SettingsModal, { USER_API_KEY_STORAGE } from './components/SettingsModal';
 
-const LOCAL_STORAGE_KEY = 'nhk-bilingual-news-articles';
+const LOCAL_STORAGE_KEY = 'japan-times-bilingual-news-articles';
+const LEGACY_LOCAL_STORAGE_KEY = 'nhk-bilingual-news-articles';
 
 const getInitialArticles = (): NewsArticle[] => {
   try {
+    // Clean up legacy NHK cache if present
+    localStorage.removeItem(LEGACY_LOCAL_STORAGE_KEY);
+
     const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (savedData) {
       const parsedArticles = JSON.parse(savedData) as NewsArticle[];

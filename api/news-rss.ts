@@ -8,7 +8,8 @@ export default async function handler(req: any, res: any) {
     }
     const data = await response.text();
     
-    // API Route (Vercel Edge/Serverless) cache settings
+    // API Route (Vercel Edge/Serverless) cache & CORS settings
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'application/xml; charset=utf-8');
     res.status(200).send(data);
