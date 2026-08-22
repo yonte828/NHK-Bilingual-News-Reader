@@ -1,6 +1,6 @@
 export default async function handler(req: any, res: any) {
-  // Using the new NHK RSS feed URL
-  const RSS_URL = 'https://news.web.nhk/n-data/conf/na/rss/cat0.xml';
+  // Using Japan Times RSS feed URL
+  const RSS_URL = 'https://www.japantimes.co.jp/feed/';
   try {
     const response = await fetch(`${RSS_URL}?t=${Date.now()}`, { cache: 'no-store' });
     if (!response.ok) {
