@@ -8,15 +8,15 @@ async function startServer() {
 
   // RSS Proxy endpoint
   app.get('/api/news-rss', async (req, res) => {
-    // Using the Japan Times RSS feed URL
-    const RSS_URL = 'https://www.japantimes.co.jp/feed/';
+    // NHK News (Top / Major News) RSS feed URL
+    const RSS_URL = 'https://news.web.nhk/n-data/conf/na/rss/cat0.xml';
     try {
       const response = await fetch(`${RSS_URL}?t=${Date.now()}`, { cache: 'no-store' });
       if (!response.ok) {
         throw new Error(`RSS feed returned ${response.status}`);
       }
       const data = await response.text();
-      res.set('Content-Type', 'application/xml');
+      res.set('Content-Type', 'application/xml; charset=utf-8');
       res.set('Cache-Control', 'no-store');
       res.send(data);
     } catch (error) {

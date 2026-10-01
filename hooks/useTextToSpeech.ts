@@ -4,7 +4,7 @@ import type { PlaybackState, PlaylistItem } from '../types';
 import { generateSpeech } from '../services/geminiService';
 
 // --- Audio Decoding Helper Functions ---
-function decode(base64: string): Uint8Array {
+function base64ToUint8Array(base64: string): Uint8Array {
   const binaryString = atob(base64);
   const len = binaryString.length;
   const bytes = new Uint8Array(len);
@@ -18,15 +18,65 @@ async function decodeAudioData(
   data: Uint8Array,
   ctx: AudioContext
 ): Promise<AudioBuffer> {
-  const dataInt16 = new Int16Array(data.buffer);
-  const frameCount = dataInt16.length;
-  // Mono, 24kHz sample rate as per TTS API
-  const buffer = ctx.createBuffer(1, frameCount, 24000); 
-  const channelData = buffer.getChannelData(0);
-  for (let i = 0; i < frameCount; i++) {
-    channelData[i] = dataInt16[i] / 32768.0;
+  // Check if data starts with 'RIFF' and contains 'WAVE' (standard WAV container)
+  const isWav = data.length >= 12 &&
+    data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46 && // 'RIFF'
+    data[8] === 0x57 && data[9] === 0x41 && data[10] === 0x56 && data[11] === 0x45;   // 'WAVE'
+
+  let audioBuffer: AudioBuffer;
+
+  if (isWav) {
+    try {
+      // AudioContext.decodeAudioData natively strips WAV headers, chunk metadata, and padding
+      // Create a detached copy slice as decodeAudioData requires
+      const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+    } catch (err) {
+      console.warn('[Audio] Native decodeAudioData failed, falling back to manual WAV header stripping:', err);
+      // Fallback: Skip 44-byte WAV header so ASCII header characters are never played as PCM noise
+      const headerOffset = 44;
+      const rawLength = Math.max(0, data.byteLength - headerOffset);
+      const alignedLength = rawLength - (rawLength % 2);
+      const dataInt16 = new Int16Array(data.buffer, data.byteOffset + headerOffset, alignedLength / 2);
+      const buffer = ctx.createBuffer(1, dataInt16.length, 24000);
+      const channelData = buffer.getChannelData(0);
+      for (let i = 0; i < dataInt16.length; i++) {
+        channelData[i] = dataInt16[i] / 32768.0;
+      }
+      audioBuffer = buffer;
+    }
+  } else {
+    // Pure raw PCM without header (24kHz, 16-bit mono LE)
+    const alignedLength = data.byteLength - (data.byteLength % 2);
+    const dataInt16 = new Int16Array(data.buffer, data.byteOffset, alignedLength / 2);
+    const buffer = ctx.createBuffer(1, dataInt16.length, 24000);
+    const channelData = buffer.getChannelData(0);
+    for (let i = 0; i < dataInt16.length; i++) {
+      channelData[i] = dataInt16[i] / 32768.0;
+    }
+    audioBuffer = buffer;
   }
-  return buffer;
+
+  // Apply subtle micro fade-in and fade-out (approx 5ms = 120 samples at 24kHz)
+  // This eliminates any speaker pop/click caused by non-zero start/end samples or DC offset
+  const sampleRate = audioBuffer.sampleRate || 24000;
+  const fadeSamples = Math.min(Math.floor(sampleRate * 0.006), Math.floor(audioBuffer.length / 10)); // ~6ms
+  if (fadeSamples > 0) {
+    for (let channel = 0; channel < audioBuffer.numberOfChannels; channel++) {
+      const channelData = audioBuffer.getChannelData(channel);
+      const len = channelData.length;
+      // Linear ramp in at the beginning
+      for (let i = 0; i < fadeSamples; i++) {
+        channelData[i] *= (i / fadeSamples);
+      }
+      // Linear ramp out at the end
+      for (let i = 0; i < fadeSamples; i++) {
+        channelData[len - 1 - i] *= (i / fadeSamples);
+      }
+    }
+  }
+
+  return audioBuffer;
 }
 // --- End Helper Functions ---
 
@@ -159,7 +209,7 @@ export const useTextToSpeech = () => {
       // Fetch current item (awaits the same promise if prefetch already started it)
       const audioB64 = await fetchAudioForItem(index);
       
-      const audioBytes = decode(audioB64);
+      const audioBytes = base64ToUint8Array(audioB64);
       const audioBuffer = await decodeAudioData(audioBytes, audioContext);
       
       if (sourceNodeRef.current) {

@@ -1,8 +1,7 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
 import type { NewsArticle, PlaylistItem } from './types';
 import { fetchAndParseRss } from './services/rssService';
-import { translateText, translateArticlesBatch, generateSpeech } from './services/geminiService';
+import { translateArticlesBatch, generateSpeech } from './services/geminiService';
 import { useTextToSpeech } from './hooks/useTextToSpeech';
 import NewsItem from './components/NewsItem';
 import PlayerControls from './components/PlayerControls';
@@ -20,7 +19,12 @@ const getInitialArticles = (): NewsArticle[] => {
     const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (savedData) {
       const parsedArticles = JSON.parse(savedData) as NewsArticle[];
-      if (Array.isArray(parsedArticles)) {
+      if (Array.isArray(parsedArticles) && parsedArticles.length > 0) {
+        // If cached articles are from older Japan Times feeds, clear cache
+        if (parsedArticles[0].link?.includes('japantimes.co.jp')) {
+          localStorage.removeItem(LOCAL_STORAGE_KEY);
+          return [];
+        }
         return parsedArticles;
       }
     }
@@ -30,7 +34,6 @@ const getInitialArticles = (): NewsArticle[] => {
   }
   return [];
 };
-
 
 const App: React.FC = () => {
   const [articles, setArticles] = useState<NewsArticle[]>(getInitialArticles);
@@ -47,7 +50,7 @@ const App: React.FC = () => {
 
   const { play, stop, pause, resume, playbackState, currentItem } = useTextToSpeech();
 
-  // Check for API Key (Strictly check localStorage only)
+  // Check for API Key
   const checkApiKey = useCallback(() => {
      const userKey = localStorage.getItem(USER_API_KEY_STORAGE);
      setHasApiKey(!!userKey);
@@ -89,11 +92,15 @@ const App: React.FC = () => {
     try {
       const newsItems = await fetchAndParseRss();
       setArticles(prevArticles => {
+        const isPreviousSourceValid = prevArticles.length > 0 && !prevArticles[0].link?.includes('japantimes.co.jp');
+        
         return newsItems.map(newItem => {
+          if (!isPreviousSourceValid) return newItem;
           const existingItem = prevArticles.find(a => a.id === newItem.id);
           if (existingItem) {
             return {
               ...newItem,
+              completedDescription: existingItem.completedDescription,
               translatedTitle: existingItem.translatedTitle,
               translatedDescription: existingItem.translatedDescription
             };
@@ -103,7 +110,7 @@ const App: React.FC = () => {
       });
     } catch (err) {
       console.error(err);
-      setError('Failed to fetch or parse the news feed. Please try again later.');
+      setError('NHKニュースフィードの取得に失敗しました。時間をおいて再読み込みしてください。');
       setArticles(prev => {
         if (prev.length === 0) {
           localStorage.removeItem(LOCAL_STORAGE_KEY);
@@ -116,7 +123,6 @@ const App: React.FC = () => {
   }, [articles.length]);
 
   useEffect(() => {
-    // Always fetch latest news on mount, keeping existing articles while loading
     loadNews(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -126,45 +132,43 @@ const App: React.FC = () => {
         setIsSettingsOpen(true);
         return;
     }
+
     if (translatingId || isTranslatingAll) return;
 
     const article = articles.find(a => a.id === articleId);
     if (!article) return;
     
     setTranslatingId(articleId);
-    stop();
-
     try {
+      let completedDescription = article.completedDescription;
       let translatedTitle = article.translatedTitle;
       let translatedDescription = article.translatedDescription;
       
-      // 1. Translate Text if needed
-      if (!translatedTitle || !translatedDescription) {
+      // 1. Complete Japanese & Translate to English in ONE API call
+      if (!translatedTitle || !translatedDescription || !completedDescription) {
         const translatedData = await translateArticlesBatch([article]);
         if (translatedData.length > 0) {
+            completedDescription = translatedData[0].completedDescription;
             translatedTitle = translatedData[0].translatedTitle;
             translatedDescription = translatedData[0].translatedDescription;
+
+            setArticles(prev => prev.map(a => a.id === articleId ? {
+                ...a,
+                completedDescription,
+                translatedTitle,
+                translatedDescription
+            } : a));
         } else {
             throw new Error("Translation failed.");
         }
       }
 
-      // Update State with text
-      setArticles(prevArticles =>
-        prevArticles.map(a =>
-          a.id === articleId ? { 
-            ...a, 
-            translatedTitle, 
-            translatedDescription
-          } : a
-        )
-      );
-      
-      const cleanEnDesc = article.description.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
-      
-      // Combine title and description to reduce API calls (2 requests per article instead of 4)
-      const englishText = `${article.title}.\n${cleanEnDesc}`;
-      const japaneseText = `${translatedTitle}。\n${translatedDescription}`;
+      // 2. Play Audio (Both English and Japanese with clean, completed sentences)
+      const cleanJaDesc = (completedDescription || article.description).replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+      const cleanEnDesc = (translatedDescription || '').replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+
+      const englishText = `${translatedTitle}.\n${cleanEnDesc}`;
+      const japaneseText = `${article.title}。\n${cleanJaDesc}`;
 
       const playlist: PlaylistItem[] = [
         { text: englishText, lang: 'en', voice: 'Kore' },
@@ -176,10 +180,10 @@ const App: React.FC = () => {
     } catch (err: any) {
       console.error(err);
       if (err.message === "API_KEY_MISSING") {
-          setError("API Key is missing. Please check settings.");
+          setError("API Keyが設定されていません。設定画面からGemini APIキーを入力してください。");
           setIsSettingsOpen(true);
       } else {
-          setError(`Failed to process article. Please check your connection.`);
+          setError(`記事の翻訳・音声生成に失敗しました。接続をご確認ください。`);
       }
     } finally {
       setTranslatingId(null);
@@ -191,24 +195,22 @@ const App: React.FC = () => {
         setIsSettingsOpen(true);
         return;
     }
+
     if (isTranslatingAll) return;
+    
     setIsTranslatingAll(true);
     setError(null);
-    stop();
-  
-    try {
-      // 1. Translate Text First (Batched)
-      const articlesToProcess = articles.filter(a => !a.translatedTitle || !a.translatedDescription);
-      
-      let localArticles = [...articles];
-      
-      if (articlesToProcess.length > 0) {
-        const TEXT_CHUNK_SIZE = 5;
-        const totalChunks = Math.ceil(articlesToProcess.length / TEXT_CHUNK_SIZE);
+    const articlesToProcess = articles.filter(a => !a.translatedTitle || !a.translatedDescription || !a.completedDescription);
 
+    try {
+      const TEXT_CHUNK_SIZE = 5;
+      const totalChunks = Math.ceil(articlesToProcess.length / TEXT_CHUNK_SIZE);
+      const localArticles = [...articles];
+
+      if (articlesToProcess.length > 0) {
         for (let i = 0; i < articlesToProcess.length; i += TEXT_CHUNK_SIZE) {
             const chunkIndex = Math.floor(i / TEXT_CHUNK_SIZE) + 1;
-            setTranslationProgress(`Translating text ${chunkIndex}/${totalChunks}...`);
+            setTranslationProgress(`翻訳＆補完中 ${chunkIndex}/${totalChunks}...`);
             
             const chunk = articlesToProcess.slice(i, i + TEXT_CHUNK_SIZE);
             const translatedData = await translateArticlesBatch(chunk);
@@ -219,22 +221,23 @@ const App: React.FC = () => {
                 if (idx !== -1) {
                     localArticles[idx] = {
                         ...localArticles[idx],
+                        completedDescription: tItem.completedDescription,
                         translatedTitle: tItem.translatedTitle,
                         translatedDescription: tItem.translatedDescription
                     };
                 }
             });
 
-            // --- Pre-generate Audio for First Article ---
+            // Pre-generate Audio for First Article for instant playback
             if (i === 0 && localArticles.length > 0) {
                 const first = localArticles[0];
                 if (first.translatedTitle && first.translatedDescription) {
-                    const cleanEnDesc = first.description.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
-                    const englishText = `${first.title}.\n${cleanEnDesc}`;
-                    const japaneseText = `${first.translatedTitle}。\n${first.translatedDescription}`;
+                    const cleanJaDesc = (first.completedDescription || first.description).replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+                    const cleanEnDesc = first.translatedDescription.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+
+                    const englishText = `${first.translatedTitle}.\n${cleanEnDesc}`;
+                    const japaneseText = `${first.title}。\n${cleanJaDesc}`;
                     
-                    console.log(`[App] Pre-generating audio for article "${first.title.substring(0,10)}..." to enable instant playback.`);
-                    // Fire and forget (Token bucket will handle burst)
                     generateSpeech(englishText, 'Kore', 'en').catch(e => console.warn("Pre-gen en failed", e));
                     generateSpeech(japaneseText, 'Puck', 'ja').catch(e => console.warn("Pre-gen ja failed", e));
                 }
@@ -243,7 +246,7 @@ const App: React.FC = () => {
             setArticles([...localArticles]);
             
             if (i + TEXT_CHUNK_SIZE < articlesToProcess.length) {
-                await new Promise(r => setTimeout(r, 500));
+                await new Promise(r => setTimeout(r, 400));
             }
         }
       }
@@ -251,10 +254,10 @@ const App: React.FC = () => {
     } catch (e: any) {
       console.error(`Error in handleTranslateAll`, e);
       if (e.message === "API_KEY_MISSING") {
-          setError("API Key is missing. Please check settings.");
+          setError("API Keyが設定されていません。設定画面からGemini APIキーを入力してください。");
           setIsSettingsOpen(true);
       } else {
-          setError("Failed to complete translation.");
+          setError("一括翻訳に失敗しました。");
       }
     } finally {
       setIsTranslatingAll(false);
@@ -262,15 +265,15 @@ const App: React.FC = () => {
     }
   };
 
-
   const handlePlayAll = async () => {
     if (!hasApiKey) {
         setIsSettingsOpen(true);
         return;
     }
+
     stop();
     
-    const untranslated = articles.some(a => !a.translatedTitle);
+    const untranslated = articles.some(a => !a.translatedTitle || !a.completedDescription);
     
     if (untranslated) {
         await handleTranslateAll();
@@ -278,26 +281,26 @@ const App: React.FC = () => {
 
     // Build Playlist
     const playlist: PlaylistItem[] = [];
-    
-        articles.forEach(a => {
-        if (!a.translatedTitle) return;
-        const cleanEnDesc = a.description.replace(/<[^>]*>?/gm, "").replace(/\s+/g, " ").trim();
         
-        const englishText = `${a.title}.\n${cleanEnDesc}`;
-        const japaneseText = `${a.translatedTitle}。\n${a.translatedDescription || ""}`;
+    articles.forEach(a => {
+        if (!a.translatedTitle) return;
+        const cleanJaDesc = (a.completedDescription || a.description).replace(/<[^>]*>?/gm, "").replace(/\s+/g, " ").trim();
+        const cleanEnDesc = (a.translatedDescription || "").replace(/<[^>]*>?/gm, "").replace(/\s+/g, " ").trim();
+        
+        const englishText = `${a.translatedTitle}.\n${cleanEnDesc}`;
+        const japaneseText = `${a.title}。\n${cleanJaDesc}`;
         
         playlist.push({ text: englishText, lang: "en", voice: "Kore" });
         playlist.push({ text: japaneseText, lang: "ja", voice: "Puck" });
     });
 
     if (playlist.length === 0) {
-        setError("No translated articles available to play.");
+        setError("再生可能な翻訳済み記事がありません。");
         return;
     }
 
     play(playlist);
   };
-
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-nhk-gray transition-colors duration-500">
@@ -305,10 +308,10 @@ const App: React.FC = () => {
         <div className="container mx-auto px-4 py-3 flex justify-between items-center">
           <div className="flex items-center space-x-3">
             <BrandIcon />
-            <h1 className="text-xl sm:text-2xl font-bold hidden sm:block">Japan Times Bilingual News Reader</h1>
+            <h1 className="text-xl sm:text-2xl font-bold hidden sm:block">NHK Bilingual News Reader</h1>
           </div>
-          <div className="flex items-center space-x-2 sm:space-x-3">
-             <button
+          <div className="flex items-center space-x-2 sm:space-x-3"> 
+            <button
               onClick={() => setIsSettingsOpen(true)}
               className="p-2 rounded-full hover:bg-white/20 transition-colors"
               aria-label="Settings"
@@ -324,10 +327,10 @@ const App: React.FC = () => {
               {isTranslatingAll ? (
                   <div className="flex items-center">
                       <LoadingSpinner className="h-4 w-4 mr-2" />
-                      <span className="text-xs sm:text-sm whitespace-nowrap">{translationProgress || 'Processing'}</span>
+                      <span className="text-xs sm:text-sm whitespace-nowrap">{translationProgress || '処理中...'}</span>
                   </div>
               ) : (
-                <span>{allTranslated ? 'Translated' : 'Translate All'}</span>
+                <span>{allTranslated ? '翻訳済み' : '一括翻訳・補完'}</span>
               )}
             </button>
             <button
@@ -336,9 +339,8 @@ const App: React.FC = () => {
               className={`flex items-center justify-center px-3 py-2 bg-white/10 text-white font-semibold rounded-md hover:bg-white/20 transition-colors disabled:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed ${!hasApiKey ? 'opacity-50 cursor-not-allowed' : ''}`}
               title="Play all translated articles"
             >
-              <span>Play All</span>
+              <span>すべて連続再生</span>
             </button>
-
             <button
               onClick={() => loadNews(true)}
               disabled={isLoading || isTranslatingAll}
@@ -353,7 +355,7 @@ const App: React.FC = () => {
       
       {!hasApiKey && !isLoading && (
         <div className="bg-yellow-100 dark:bg-yellow-900/40 p-3 text-center text-yellow-800 dark:text-yellow-200 text-sm font-medium">
-          Please set your Gemini API Key in <button onClick={() => setIsSettingsOpen(true)} className="underline hover:text-yellow-900 dark:hover:text-white font-bold">Settings</button> to enable translation and audio.
+          翻訳と読み上げ機能を利用するには、<button onClick={() => setIsSettingsOpen(true)} className="underline hover:text-yellow-900 dark:hover:text-white font-bold">設定（歯車アイコン）</button>からご自身のGemini APIキーを入力してください。
         </div>
       )}
       
@@ -361,7 +363,7 @@ const App: React.FC = () => {
         {isLoading && articles.length === 0 && (
           <div className="flex flex-col items-center justify-center h-64 text-gray-500 dark:text-gray-400">
             <LoadingSpinner className="h-12 w-12" />
-            <p className="mt-4 text-lg">Fetching latest news from Japan Times...</p>
+            <p className="mt-4 text-lg">NHKニュースを取得中...</p>
           </div>
         )}
 
@@ -370,7 +372,7 @@ const App: React.FC = () => {
             <div className="flex items-center">
               <ErrorIcon />
               <div className="ml-3">
-                <p className="font-bold">An Error Occurred</p>
+                <p className="font-bold">エラーが発生しました</p>
                 <p className="text-sm">{error}</p>
               </div>
             </div>
@@ -402,9 +404,9 @@ const App: React.FC = () => {
       )}
       
       <SettingsModal 
-        isOpen={isSettingsOpen} 
-        onClose={() => setIsSettingsOpen(false)} 
-        onSave={checkApiKey}
+         isOpen={isSettingsOpen} 
+         onClose={() => setIsSettingsOpen(false)} 
+         onSave={checkApiKey}
       />
     </div>
   );

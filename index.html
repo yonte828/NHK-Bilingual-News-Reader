@@ -1,10 +1,10 @@
-
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ja">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Japan Times Bilingual News Reader</title>
+    <title>NHK News Reader</title>
+    <meta name="description" content="An application that fetches the latest NHK news from an RSS feed, translates it from Japanese to English, and reads both versions aloud using Gemini API." />
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -21,17 +21,6 @@
         }
       }
     </script>
-  <script type="importmap">
-{
-  "imports": {
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "react": "https://aistudiocdn.com/react@^19.2.0",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.29.0"
-  }
-}
-</script>
-<link rel="stylesheet" href="/index.css">
 </head>
   <body class="bg-gray-100 dark:bg-nhk-gray text-gray-900 dark:text-gray-100">
     <div id="root"></div>
