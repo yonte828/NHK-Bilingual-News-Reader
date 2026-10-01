@@ -50,13 +50,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSave }
           </button>
         </div>
         
-        <div className="p-6">
+        <form onSubmit={(e) => { e.preventDefault(); handleSave(); }} className="p-6">
           <div className="mb-6">
             <label htmlFor="apiKey" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Gemini API Key
             </label>
             <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
-              This app requires your own API key to function. The key is stored locally in your browser and is never sent to our servers.
+              Gemini APIキーを入力してください。キーはお使いのブラウザ内（ローカルストレージ）にのみ保存され、外部サーバーには送信されません。
             </p>
             <div className="relative">
               <input
@@ -65,6 +65,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSave }
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder="AIzaSy..."
+                autoFocus
                 className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-nhk-red focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               />
               <button
@@ -96,8 +97,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSave }
             </div>
           </div>
 
-          <div className="flex justify-between">
+          <div className="flex justify-between items-center">
              <button
+              type="button"
               onClick={handleClear}
               className="text-sm text-red-500 hover:text-red-700 hover:underline"
             >
@@ -105,20 +107,21 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSave }
             </button>
             <div className="flex space-x-3">
               <button
+                type="button"
                 onClick={onClose}
                 className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600 transition-colors"
               >
                 Cancel
               </button>
               <button
-                onClick={handleSave}
+                type="submit"
                 className="px-4 py-2 text-sm font-medium text-white bg-nhk-red rounded-md hover:bg-red-700 transition-colors"
               >
                 Save Settings
               </button>
             </div>
           </div>
-        </div>
+        </form>
       </div>
     </div>
   );

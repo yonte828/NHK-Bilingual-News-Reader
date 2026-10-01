@@ -81,9 +81,13 @@ async function decodeAudioData(
 // --- End Helper Functions ---
 
 
-export const useTextToSpeech = () => {
+export const useTextToSpeech = (options?: { onError?: (error: any) => void }) => {
   const [playbackState, setPlaybackState] = useState<PlaybackState>('stopped');
   const [currentItem, setCurrentItem] = useState<PlaylistItem | undefined>(undefined);
+  const onErrorRef = useRef(options?.onError);
+  useEffect(() => {
+    onErrorRef.current = options?.onError;
+  }, [options?.onError]);
   
   const playlistRef = useRef<PlaylistItem[]>([]);
   const currentItemIndexRef = useRef(0);
@@ -235,6 +239,7 @@ export const useTextToSpeech = () => {
       setPlaybackState('playing');
     } catch (error) {
       console.error(`Error during playback for item "${item.text.substring(0, 30)}...". Skipping.`, error);
+      onErrorRef.current?.(error);
       // Skip to next on error
       playTrack(index + 1);
     }

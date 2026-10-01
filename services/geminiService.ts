@@ -45,8 +45,8 @@ export const translateArticlesBatch = async (
         
         const itemsToProcess = articles.map(a => ({
             id: a.id,
-            t: a.title, 
-            d: a.description.replace(/<[^>]*>?/gm, '').trim()
+            t: a.title || '', 
+            d: (a.description || a.title || '').replace(/<[^>]*>?/gm, '').trim()
         }));
 
         const response = await aiInstance.models.generateContent({
@@ -99,14 +99,21 @@ Return a JSON array of objects with keys: id, completedDescription, translatedTi
             }
         });
 
-        const jsonText = response.text;
-        if (!jsonText) return [];
+        const rawText = response.text || "";
+        if (!rawText.trim()) {
+            throw new Error("Gemini APIから空の応答が返されました。");
+        }
+
+        let cleanJson = rawText.trim();
+        if (cleanJson.startsWith('```')) {
+            cleanJson = cleanJson.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+        }
         
-        return JSON.parse(jsonText);
+        const parsed = JSON.parse(cleanJson);
+        return Array.isArray(parsed) ? parsed : [parsed];
     } catch (error: any) {
         console.error("Batch translation and completion failed:", error);
-        if (error.message === "API_KEY_MISSING") throw error;
-        return [];
+        throw error;
     }
 };
 

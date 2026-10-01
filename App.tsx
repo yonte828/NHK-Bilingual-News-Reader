@@ -34,6 +34,47 @@ const getInitialArticles = (): NewsArticle[] => {
   return [];
 };
 
+// Friendly error message helper for Gemini API issues
+const getFriendlyErrorMessage = (err: any): { message: string; needApiKeyModal: boolean } => {
+  const errMsg = err?.message || String(err || '');
+  const lower = errMsg.toLowerCase();
+
+  if (errMsg.includes("API_KEY_MISSING")) {
+    return {
+      message: "API Keyが設定されていません。右上の設定アイコンからGemini APIキーを入力してください。",
+      needApiKeyModal: true,
+    };
+  }
+  if (lower.includes("api_key_invalid") || lower.includes("api key not valid") || (lower.includes("400") && lower.includes("key"))) {
+    return {
+      message: "入力されたGemini APIキーが無効です。設定画面で正しいAPIキー（AIzaSy...）をご確認ください。",
+      needApiKeyModal: true,
+    };
+  }
+  if (lower.includes("resource_exhausted") || lower.includes("429") || lower.includes("quota")) {
+    return {
+      message: "Gemini APIの利用枠の上限（レートリミットまたはクォータ）に達しました。1〜2分待ってから再度お試しください。",
+      needApiKeyModal: false,
+    };
+  }
+  if (lower.includes("permission_denied") || lower.includes("403") || lower.includes("referer")) {
+    return {
+      message: "APIキーのアクセス制限エラーです。Google Cloud ConsoleでAPIキーの制限（HTTPリファラー制限など）をご確認ください。",
+      needApiKeyModal: true,
+    };
+  }
+  if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("load failed")) {
+    return {
+      message: "Gemini APIサーバーへの通信に失敗しました。インターネット接続や広告ブロッカーの設定をご確認ください。",
+      needApiKeyModal: false,
+    };
+  }
+  return {
+    message: `記事の翻訳・音声生成に失敗しました: ${errMsg}`,
+    needApiKeyModal: false,
+  };
+};
+
 const App: React.FC = () => {
   const [articles, setArticles] = useState<NewsArticle[]>(getInitialArticles);
   const [isLoading, setIsLoading] = useState<boolean>(articles.length === 0);
@@ -47,7 +88,15 @@ const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [hasApiKey, setHasApiKey] = useState<boolean>(false);
 
-  const { play, stop, pause, resume, playbackState, currentItem } = useTextToSpeech();
+  const { play, stop, pause, resume, playbackState, currentItem } = useTextToSpeech({
+    onError: (err) => {
+      const friendly = getFriendlyErrorMessage(err);
+      setError(friendly.message);
+      if (friendly.needApiKeyModal) {
+        setIsSettingsOpen(true);
+      }
+    }
+  });
 
   // Check for API Key
   const checkApiKey = useCallback(() => {
@@ -177,12 +226,11 @@ const App: React.FC = () => {
       play(playlist);
 
     } catch (err: any) {
-      console.error(err);
-      if (err.message === "API_KEY_MISSING") {
-          setError("API Keyが設定されていません。設定画面からGemini APIキーを入力してください。");
-          setIsSettingsOpen(true);
-      } else {
-          setError(`記事の翻訳・音声生成に失敗しました。接続をご確認ください。`);
+      console.error("handleTranslateAndPlay error:", err);
+      const friendly = getFriendlyErrorMessage(err);
+      setError(friendly.message);
+      if (friendly.needApiKeyModal) {
+        setIsSettingsOpen(true);
       }
     } finally {
       setTranslatingId(null);
@@ -252,11 +300,10 @@ const App: React.FC = () => {
       
     } catch (e: any) {
       console.error(`Error in handleTranslateAll`, e);
-      if (e.message === "API_KEY_MISSING") {
-          setError("API Keyが設定されていません。設定画面からGemini APIキーを入力してください。");
-          setIsSettingsOpen(true);
-      } else {
-          setError("一括翻訳に失敗しました。");
+      const friendly = getFriendlyErrorMessage(e);
+      setError(friendly.message);
+      if (friendly.needApiKeyModal) {
+        setIsSettingsOpen(true);
       }
     } finally {
       setIsTranslatingAll(false);
