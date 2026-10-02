@@ -51,6 +51,12 @@ const getFriendlyErrorMessage = (err: any): { message: string; needApiKeyModal: 
       needApiKeyModal: true,
     };
   }
+  if (lower.includes("503") || lower.includes("overloaded") || lower.includes("high demand") || lower.includes("unavailable")) {
+    return {
+      message: "Geminiサーバーが一時的に混雑しています（503 High Demand）。自動再試行後も接続できなかったため、少し時間をおいて再度お試しください。",
+      needApiKeyModal: false,
+    };
+  }
   if (lower.includes("resource_exhausted") || lower.includes("429") || lower.includes("quota")) {
     return {
       message: "Gemini APIの利用枠の上限（レートリミットまたはクォータ）に達しました。1〜2分待ってから再度お試しください。",

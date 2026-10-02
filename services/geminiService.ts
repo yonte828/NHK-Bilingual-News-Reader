@@ -40,20 +40,15 @@ export const translateArticlesBatch = async (
 }[]> => {
     if (articles.length === 0) return [];
     
-    try {
-        const aiInstance = getAi();
-        
-        const itemsToProcess = articles.map(a => ({
-            id: a.id,
-            t: a.title || '', 
-            d: (a.description || a.title || '').replace(/<[^>]*>?/gm, '').trim()
-        }));
+    const aiInstance = getAi();
+    
+    const itemsToProcess = articles.map(a => ({
+        id: a.id,
+        t: a.title || '', 
+        d: (a.description || a.title || '').replace(/<[^>]*>?/gm, '').trim()
+    }));
 
-        const response = await aiInstance.models.generateContent({
-            model: 'gemini-3.8-flash',
-            contents: JSON.stringify(itemsToProcess),
-            config: {
-                systemInstruction: `You are an expert bilingual news editor and translator specializing in Japanese and English news.
+    const systemInstruction = `You are an expert bilingual news editor and translator specializing in Japanese and English news.
 You will receive a JSON array of news items with Japanese title (t) and Japanese description (d).
 
 NHK RSS descriptions are often truncated with '…' or cut off mid-sentence due to character limits.
@@ -72,49 +67,90 @@ For each news item, you must perform two tasks simultaneously:
    - Translate the completed Japanese description into natural, clear English sentence(s).
    - Ensure the English translation is a grammatically complete sentence with proper punctuation and no trailing ellipsis.
 
-Return a JSON array of objects with keys: id, completedDescription, translatedTitle, translatedDescription.`,
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.ARRAY,
-                    items: {
-                        type: Type.OBJECT,
-                        properties: {
-                            id: { type: Type.STRING },
-                            completedDescription: { 
-                                type: Type.STRING,
-                                description: "Natural completed Japanese description with no trailing ellipsis" 
-                            },
-                            translatedTitle: { 
-                                type: Type.STRING,
-                                description: "Concise English news headline" 
-                            },
-                            translatedDescription: { 
-                                type: Type.STRING,
-                                description: "Full, natural English translation of the description" 
-                            }
-                        },
-                        required: ["id", "completedDescription", "translatedTitle", "translatedDescription"]
+Return a JSON array of objects with keys: id, completedDescription, translatedTitle, translatedDescription.`;
+
+    const responseSchema = {
+        type: Type.ARRAY,
+        items: {
+            type: Type.OBJECT,
+            properties: {
+                id: { type: Type.STRING },
+                completedDescription: { 
+                    type: Type.STRING,
+                    description: "Natural completed Japanese description with no trailing ellipsis" 
+                },
+                translatedTitle: { 
+                    type: Type.STRING,
+                    description: "Concise English news headline" 
+                },
+                translatedDescription: { 
+                    type: Type.STRING,
+                    description: "Full, natural English translation of the description" 
+                }
+            },
+            required: ["id", "completedDescription", "translatedTitle", "translatedDescription"]
+        }
+    };
+
+    // Resilient fallback list in case of 503 High Demand / Model Overloaded
+    const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+    let lastError: any;
+
+    for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
+        const model = candidateModels[mIdx];
+        const maxAttemptsForModel = 2;
+
+        for (let attempt = 0; attempt < maxAttemptsForModel; attempt++) {
+            try {
+                const response = await aiInstance.models.generateContent({
+                    model,
+                    contents: JSON.stringify(itemsToProcess),
+                    config: {
+                        systemInstruction,
+                        responseMimeType: "application/json",
+                        responseSchema
                     }
+                });
+
+                const rawText = response.text || "";
+                if (!rawText.trim()) {
+                    throw new Error("Gemini APIから空の応答が返されました。");
+                }
+
+                let cleanJson = rawText.trim();
+                if (cleanJson.startsWith('```')) {
+                    cleanJson = cleanJson.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+                }
+                
+                const parsed = JSON.parse(cleanJson);
+                return Array.isArray(parsed) ? parsed : [parsed];
+            } catch (error: any) {
+                lastError = error;
+                if (error.message === "API_KEY_MISSING") throw error;
+                
+                const errStr = String(error?.message || error).toLowerCase();
+                const isOverload = errStr.includes('503') || 
+                                   errStr.includes('overloaded') || 
+                                   errStr.includes('high demand') || 
+                                   errStr.includes('unavailable') ||
+                                   errStr.includes('resource_exhausted') ||
+                                   errStr.includes('429');
+
+                if (isOverload) {
+                    console.warn(`Model ${model} overloaded or high demand (Attempt ${attempt + 1}/${maxAttemptsForModel}). Retrying...`, error);
+                    // Exponential backoff
+                    await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
+                    continue; // try next attempt or fallback to next model
+                } else {
+                    // Non-transient errors (e.g. invalid API key) should fail fast
+                    throw error;
                 }
             }
-        });
-
-        const rawText = response.text || "";
-        if (!rawText.trim()) {
-            throw new Error("Gemini APIから空の応答が返されました。");
         }
-
-        let cleanJson = rawText.trim();
-        if (cleanJson.startsWith('```')) {
-            cleanJson = cleanJson.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-        }
-        
-        const parsed = JSON.parse(cleanJson);
-        return Array.isArray(parsed) ? parsed : [parsed];
-    } catch (error: any) {
-        console.error("Batch translation and completion failed:", error);
-        throw error;
     }
+
+    console.error("All translation attempts and fallback models exhausted:", lastError);
+    throw lastError;
 };
 
 // --- Token Bucket Rate Limiter ---
@@ -211,8 +247,9 @@ export const generateSpeech = async (text: string, voice: 'Kore' | 'Puck', lang:
                     ? "Clear, natural Japanese news anchor"
                     : "Clear, professional English news anchor";
 
+                const ttsModel = attempt === MAX_RETRIES - 1 ? "gemini-3.8-flash-tts" : "gemini-3.8-flash-lite-tts";
                 const response = await aiInstance.models.generateContent({
-                    model: "gemini-3.8-flash-lite-tts",
+                    model: ttsModel,
                     contents: [
                         {
                             role: "user",
