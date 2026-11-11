@@ -40,7 +40,8 @@ async function startServer() {
         res.status(400).json({ error: 'items must be an array' });
         return;
       }
-      const results = await translateArticlesBatchServer(items);
+      const apiKey = (req.headers['x-api-key'] as string) || undefined;
+      const results = await translateArticlesBatchServer(items, apiKey);
       res.json({ results });
     } catch (error: any) {
       console.error('Error in /api/gemini/translate-batch:', error);
@@ -55,7 +56,8 @@ async function startServer() {
         res.status(400).json({ error: 'text must be a string' });
         return;
       }
-      const translated = await translateTextServer(text);
+      const apiKey = (req.headers['x-api-key'] as string) || undefined;
+      const translated = await translateTextServer(text, apiKey);
       res.json({ translated });
     } catch (error: any) {
       console.error('Error in /api/gemini/translate:', error);
@@ -70,10 +72,12 @@ async function startServer() {
         res.status(400).json({ error: 'text is required' });
         return;
       }
+      const apiKey = (req.headers['x-api-key'] as string) || undefined;
       const audioData = await generateSpeechServer(
         text,
         voice === 'Puck' ? 'Puck' : 'Kore',
-        lang === 'ja' ? 'ja' : 'en'
+        lang === 'ja' ? 'ja' : 'en',
+        apiKey
       );
       res.json({ audioData });
     } catch (error: any) {

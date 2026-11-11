@@ -1,0 +1,6 @@
+{
+  "summary":  "Vercel上のスマホ利用時に発生する404エラーを解消し、ウェブアプリ上でのAPIキー直接入力（BYOK）およびクライアントサイド直接実行に対応するための実装計画。\nサーバーAPI（/api/gemini/...）が存在しない静的環境でも、ブラウザから直接Gemini API（gemini-3.1-flash-lite）を呼び出して一括翻訳・補完・音声読み上げが完結するハイブリッド設計を構築します。",
+  "updatedAt":  "2026-11-11T13:48:04.855759527Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

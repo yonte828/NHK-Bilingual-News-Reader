@@ -5,7 +5,8 @@ import { translateArticlesBatch } from './services/geminiService';
 import { useTextToSpeech } from './hooks/useTextToSpeech';
 import NewsItem from './components/NewsItem';
 import PlayerControls from './components/PlayerControls';
-import { LoadingSpinner, ErrorIcon, BrandIcon, RefreshIcon } from './components/IconComponents';
+import { LoadingSpinner, ErrorIcon, BrandIcon, RefreshIcon, SettingsIcon } from './components/IconComponents';
+import SettingsModal, { USER_API_KEY_STORAGE } from './components/SettingsModal';
 
 const LOCAL_STORAGE_KEY = 'nhk-bilingual-news-articles';
 
@@ -31,20 +32,44 @@ const getInitialArticles = (): NewsArticle[] => {
   return [];
 };
 
-const getFriendlyErrorMessage = (err: any): string => {
+const getFriendlyErrorMessage = (err: any): { message: string; needSettings: boolean } => {
   const errMsg = err?.message || String(err || '');
   const lower = errMsg.toLowerCase();
 
+  if (errMsg.includes('API_KEY_MISSING') || lower.includes('gemini_api_key_not_configured')) {
+    return {
+      message: 'Gemini APIキーが設定されていません。右上の設定（歯車アイコン）からAPIキーを入力してください。',
+      needSettings: true,
+    };
+  }
+  if (lower.includes('api_key_invalid') || lower.includes('api key not valid') || (lower.includes('400') && lower.includes('key'))) {
+    return {
+      message: '設定されたGemini APIキーが無効です。右上の設定から正しいAPIキーをご確認ください。',
+      needSettings: true,
+    };
+  }
   if (lower.includes('503') || lower.includes('overloaded') || lower.includes('high demand') || lower.includes('unavailable')) {
-    return 'Geminiサーバーが混雑しています。少し時間をおいて再度お試しください。';
+    return {
+      message: 'Geminiサーバーが一時的に混雑しています。少し時間をおいて再度お試しください。',
+      needSettings: false,
+    };
   }
   if (lower.includes('resource_exhausted') || lower.includes('429') || lower.includes('quota')) {
-    return 'APIの利用枠上限に達しました。1〜2分待ってから再度お試しください。';
+    return {
+      message: 'APIの利用枠上限に達しました。1〜2分待ってから再度お試しください。',
+      needSettings: false,
+    };
   }
   if (lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('load failed')) {
-    return 'サーバーへの通信に失敗しました。インターネット接続をご確認ください。';
+    return {
+      message: 'Gemini APIサーバーへの通信に失敗しました。インターネット接続や広告ブロッカーの設定をご確認ください。',
+      needSettings: false,
+    };
   }
-  return `処理中にエラーが発生しました: ${errMsg}`;
+  return {
+    message: `エラーが発生しました: ${errMsg}`,
+    needSettings: false,
+  };
 };
 
 const App: React.FC = () => {
@@ -56,11 +81,38 @@ const App: React.FC = () => {
   const [allTranslated, setAllTranslated] = useState<boolean>(false);
   const [translationProgress, setTranslationProgress] = useState<string>('');
 
+  // Settings & User API Key State
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [hasApiKey, setHasApiKey] = useState<boolean>(() => {
+    try {
+      return !!localStorage.getItem(USER_API_KEY_STORAGE);
+    } catch {
+      return false;
+    }
+  });
+
+  const checkApiKey = useCallback(() => {
+    try {
+      const key = localStorage.getItem(USER_API_KEY_STORAGE);
+      setHasApiKey(!!key);
+    } catch {
+      setHasApiKey(false);
+    }
+  }, []);
+
   const { play, stop, pause, resume, playbackState, currentItem } = useTextToSpeech({
     onError: (err) => {
-      setError(getFriendlyErrorMessage(err));
+      const friendly = getFriendlyErrorMessage(err);
+      setError(friendly.message);
+      if (friendly.needSettings) {
+        setIsSettingsOpen(true);
+      }
     },
   });
+
+  useEffect(() => {
+    checkApiKey();
+  }, [checkApiKey]);
 
   useEffect(() => {
     try {
@@ -188,7 +240,11 @@ const App: React.FC = () => {
       play(playlist);
     } catch (err: any) {
       console.error('handleTranslateAndRead error:', err);
-      setError(getFriendlyErrorMessage(err));
+      const friendly = getFriendlyErrorMessage(err);
+      setError(friendly.message);
+      if (friendly.needSettings) {
+        setIsSettingsOpen(true);
+      }
     } finally {
       setTranslatingId(null);
     }
@@ -237,7 +293,11 @@ const App: React.FC = () => {
       }
     } catch (e: any) {
       console.error('Error in handleTranslateAll:', e);
-      setError(getFriendlyErrorMessage(e));
+      const friendly = getFriendlyErrorMessage(e);
+      setError(friendly.message);
+      if (friendly.needSettings) {
+        setIsSettingsOpen(true);
+      }
     } finally {
       setIsTranslatingAll(false);
       setTranslationProgress('');
@@ -291,6 +351,14 @@ const App: React.FC = () => {
           </div>
           <div className="flex items-center space-x-2 sm:space-x-3">
             <button
+              onClick={() => setIsSettingsOpen(true)}
+              className="p-2 rounded-full hover:bg-white/20 transition-colors"
+              aria-label="Settings"
+              title="設定 (APIキー入力)"
+            >
+              <SettingsIcon className="h-6 w-6" />
+            </button>
+            <button
               onClick={handleTranslateAll}
               disabled={isLoading || articles.length === 0 || isTranslatingAll || allTranslated}
               className="flex items-center justify-center px-3 py-2 bg-white/10 text-white font-semibold rounded-md hover:bg-white/20 transition-colors disabled:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50 min-w-[140px]"
@@ -326,6 +394,19 @@ const App: React.FC = () => {
           </div>
         </div>
       </header>
+
+      {!hasApiKey && !isLoading && (
+        <div className="bg-amber-100 dark:bg-amber-950/40 border-b border-amber-300 dark:border-amber-800/50 p-2.5 text-center text-amber-900 dark:text-amber-200 text-xs sm:text-sm font-medium">
+          スマートフォンやVercelから翻訳を利用する場合、
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="underline font-bold hover:text-amber-700 dark:hover:text-amber-100 ml-1 mr-1"
+          >
+            設定（右上の歯車アイコン）
+          </button>
+          からご自身のGemini APIキーを入力してください。
+        </div>
+      )}
 
       <main className="container mx-auto p-4 sm:p-6 lg:p-8 pb-32">
         {isLoading && articles.length === 0 && (
@@ -377,6 +458,12 @@ const App: React.FC = () => {
           onStop={stop}
         />
       )}
+
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        onSave={checkApiKey}
+      />
     </div>
   );
 };

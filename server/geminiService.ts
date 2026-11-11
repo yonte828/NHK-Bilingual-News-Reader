@@ -1,15 +1,22 @@
 import { GoogleGenAI, Type, Modality, ThinkingLevel } from '@google/genai';
 
-// Initialize the server-side Gemini client with required telemetry header and v1beta API version
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  apiVersion: 'v1beta',
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
+function getGeminiClient(apiKeyOverride?: string): GoogleGenAI {
+  const apiKey = apiKeyOverride || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      'GEMINI_API_KEY_NOT_CONFIGURED: Server does not have GEMINI_API_KEY set in environment variables. Please configure GEMINI_API_KEY in your deployment settings.'
+    );
+  }
+  return new GoogleGenAI({
+    apiKey,
+    apiVersion: 'v1beta',
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
     },
-  },
-});
+  });
+}
 
 export interface BatchItem {
   id: string;
@@ -24,10 +31,11 @@ export interface TranslatedResult {
   translatedDescription: string;
 }
 
-export async function translateTextServer(text: string): Promise<string> {
+export async function translateTextServer(text: string, apiKeyOverride?: string): Promise<string> {
   const cleanText = text.trim();
   if (!cleanText) return '';
 
+  const ai = getGeminiClient(apiKeyOverride);
   const response = await ai.models.generateContent({
     model: 'gemini-3.1-flash-lite',
     contents: `You are an expert news editor and translator.
@@ -41,8 +49,13 @@ Text: "${cleanText}"`,
   return response.text || '';
 }
 
-export async function translateArticlesBatchServer(items: BatchItem[]): Promise<TranslatedResult[]> {
+export async function translateArticlesBatchServer(
+  items: BatchItem[],
+  apiKeyOverride?: string
+): Promise<TranslatedResult[]> {
   if (!items || items.length === 0) return [];
+
+  const ai = getGeminiClient(apiKeyOverride);
 
   const itemsToProcess = items.map(a => ({
     id: a.id,
@@ -146,7 +159,9 @@ Return a JSON array of objects with keys: id, completedDescription, translatedTi
           errStr.includes('timeout');
 
         if (isOverload) {
-          console.warn(`Model ${model} overloaded or timed out (Attempt ${attempt + 1}/${maxAttempts}). Retrying/falling back...`);
+          console.warn(
+            `Model ${model} overloaded or timed out (Attempt ${attempt + 1}/${maxAttempts}). Retrying/falling back...`
+          );
           await new Promise(r => setTimeout(r, 600 * (attempt + 1)));
           continue;
         } else {
@@ -167,7 +182,8 @@ const getSpeechCacheKey = (text: string, voice: string, lang: string) =>
 export async function generateSpeechServer(
   text: string,
   voice: 'Kore' | 'Puck',
-  lang: 'en' | 'ja'
+  lang: 'en' | 'ja',
+  apiKeyOverride?: string
 ): Promise<string> {
   const cleanText = text.trim();
   if (!cleanText) return '';
@@ -176,6 +192,8 @@ export async function generateSpeechServer(
   if (speechCache.has(cacheKey)) {
     return speechCache.get(cacheKey)!;
   }
+
+  const ai = getGeminiClient(apiKeyOverride);
 
   const speechStyle =
     lang === 'ja'
@@ -186,7 +204,6 @@ export async function generateSpeechServer(
   let lastError: any;
 
   for (const model of models) {
-    // Attempt with speechMetadata first, then retry without if invalid payload
     for (const withMetadata of [true, false]) {
       try {
         const parts = withMetadata
@@ -224,10 +241,8 @@ export async function generateSpeechServer(
           err?.message || err
         );
         lastError = err;
-        // If it's a 400 schema error, continue to try without metadata
         const isSchemaError = String(err?.message || '').includes('speechMetadata');
         if (!isSchemaError && withMetadata) {
-          // If error is not schema-related, no need to retry without metadata on same model
           break;
         }
       }
