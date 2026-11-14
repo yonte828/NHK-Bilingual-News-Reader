@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import type { DiagnosticStep } from '../types';
+import { testApiConnection } from '../services/geminiService';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -11,17 +13,25 @@ export const USER_API_KEY_STORAGE = 'nhk_news_user_api_key';
 const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSave }) => {
   const [apiKey, setApiKey] = useState('');
   const [isVisible, setIsVisible] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    ok: boolean;
+    summary: string;
+    steps: DiagnosticStep[];
+  } | null>(null);
 
   useEffect(() => {
-    const storedKey = localStorage.getItem(USER_API_KEY_STORAGE);
-    if (storedKey) {
-      setApiKey(storedKey);
+    if (isOpen) {
+      const storedKey = localStorage.getItem(USER_API_KEY_STORAGE);
+      setApiKey(storedKey || '');
+      setTestResult(null);
     }
   }, [isOpen]);
 
   const handleSave = () => {
-    if (apiKey.trim()) {
-      localStorage.setItem(USER_API_KEY_STORAGE, apiKey.trim());
+    const trimmed = apiKey.trim();
+    if (trimmed) {
+      localStorage.setItem(USER_API_KEY_STORAGE, trimmed);
     } else {
       localStorage.removeItem(USER_API_KEY_STORAGE);
     }
@@ -31,16 +41,35 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSave }
 
   const handleClear = () => {
     setApiKey('');
+    setTestResult(null);
     localStorage.removeItem(USER_API_KEY_STORAGE);
     onSave();
+  };
+
+  const handleRunTest = async () => {
+    if (isTesting) return;
+    setIsTesting(true);
+    setTestResult(null);
+    try {
+      const result = await testApiConnection(apiKey);
+      setTestResult(result);
+    } catch (err: any) {
+      setTestResult({
+        ok: false,
+        summary: `テスト実行中に予期しないエラーが発生しました: ${String(err?.message || err)}`,
+        steps: [],
+      });
+    } finally {
+      setIsTesting(false);
+    }
   };
 
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md overflow-hidden">
-        <div className="bg-nhk-red px-6 py-4 flex justify-between items-center">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-lg overflow-hidden max-h-[90vh] flex flex-col">
+        <div className="bg-nhk-red px-6 py-4 flex justify-between items-center shrink-0">
           <h2 className="text-white text-lg font-bold">設定 (Settings)</h2>
           <button
             onClick={onClose}
@@ -58,24 +87,27 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSave }
             e.preventDefault();
             handleSave();
           }}
-          className="p-6"
+          className="p-6 overflow-y-auto"
         >
-          <div className="mb-6">
+          <div className="mb-5">
             <label htmlFor="apiKey" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Gemini API キー
             </label>
             <p className="text-xs text-gray-500 dark:text-gray-400 mb-3 leading-relaxed">
-              Vercel等の静的サイトやスマートフォンから利用する場合、ご自身のGemini APIキーを入力してください。キーはお使いの端末（ブラウザ）にのみ安全に保存されます。
+              APIキーを保存すると、アプリはサーバー中継（/api/gemini/*）をバイパスし、お使いのブラウザから直接 Google Gemini API と通信します。キーは端末内にのみ保存されます。
             </p>
             <div className="relative">
               <input
                 id="apiKey"
                 type={isVisible ? 'text' : 'password'}
                 value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
+                onChange={(e) => {
+                  setApiKey(e.target.value);
+                  if (testResult) setTestResult(null);
+                }}
                 placeholder="AIzaSy..."
                 autoFocus
-                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-nhk-red focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                className="w-full px-4 py-2 pr-10 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-nhk-red focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm font-mono"
               />
               <button
                 type="button"
@@ -95,7 +127,27 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSave }
                 )}
               </button>
             </div>
-            <div className="mt-2 text-right">
+
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={handleRunTest}
+                disabled={isTesting}
+                className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-md border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-50 transition-colors"
+              >
+                {isTesting ? (
+                  <>
+                    <svg className="animate-spin h-3.5 w-3.5 mr-1.5 text-nhk-red" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                    </svg>
+                    接続テスト中...
+                  </>
+                ) : (
+                  '接続テストを実行'
+                )}
+              </button>
+
               <a
                 href="https://aistudio.google.com/app/apikey"
                 target="_blank"
@@ -107,7 +159,44 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSave }
             </div>
           </div>
 
-          <div className="flex justify-between items-center">
+          {testResult && (
+            <div
+              className={`mb-5 p-3 rounded-md border text-xs ${
+                testResult.ok
+                  ? 'bg-green-50 dark:bg-green-950/30 border-green-300 dark:border-green-800 text-green-900 dark:text-green-200'
+                  : 'bg-red-50 dark:bg-red-950/30 border-red-300 dark:border-red-800 text-red-900 dark:text-red-200'
+              }`}
+            >
+              <p className="font-bold mb-2">{testResult.summary}</p>
+              {testResult.steps.length > 0 && (
+                <div className="space-y-1.5 font-mono text-[11px]">
+                  {testResult.steps.map((s, idx) => (
+                    <div
+                      key={idx}
+                      className="p-2 rounded bg-white/70 dark:bg-black/25 border border-black/10 dark:border-white/10"
+                    >
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <span className="font-semibold">
+                          [{s.status === 'success' ? 'OK' : s.status === 'failed' ? 'NG' : 'SKIP'}] {s.step}
+                        </span>
+                        {(s.httpStatus !== undefined || s.durationMs !== undefined) && (
+                          <span className="opacity-80">
+                            {s.httpStatus !== undefined ? `HTTP ${s.httpStatus}` : ''}
+                            {s.httpStatus !== undefined && s.durationMs !== undefined ? ' · ' : ''}
+                            {s.durationMs !== undefined ? `${s.durationMs}ms` : ''}
+                          </span>
+                        )}
+                      </div>
+                      {s.target && <div className="opacity-75 break-all mt-0.5">{s.target}</div>}
+                      {s.detail && <div className="mt-0.5 break-words">{s.detail}</div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex justify-between items-center pt-2 border-t border-gray-100 dark:border-gray-700">
             <button
               type="button"
               onClick={handleClear}

@@ -21,3 +21,33 @@ export interface PlaylistItem {
   voice: 'Kore' | 'Puck'; // Kore (English), Puck (Japanese)
   audioB64?: string;
 }
+
+export type DiagnosticStepStatus = 'success' | 'failed' | 'skipped';
+
+export interface DiagnosticStep {
+  step: string;
+  status: DiagnosticStepStatus;
+  target?: string;
+  httpStatus?: number | string;
+  durationMs?: number;
+  detail?: string;
+}
+
+export interface ErrorReport {
+  operation: string;
+  failedStep: string;
+  summary: string;
+  needSettings?: boolean;
+  steps: DiagnosticStep[];
+  timestamp: string;
+}
+
+export class DetailedApiError extends Error {
+  public readonly report: ErrorReport;
+
+  constructor(report: ErrorReport) {
+    super(report.summary);
+    this.name = 'DetailedApiError';
+    this.report = report;
+  }
+}

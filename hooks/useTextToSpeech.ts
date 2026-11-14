@@ -1,6 +1,7 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import type { PlaybackState, PlaylistItem } from '../types';
+import { DetailedApiError } from '../types';
 import { generateSpeech } from '../services/geminiService';
 
 // --- Audio Decoding Helper Functions ---
@@ -212,10 +213,28 @@ export const useTextToSpeech = (options?: { onError?: (error: any) => void }) =>
 
       // Fetch current item (awaits the same promise if prefetch already started it)
       const audioB64 = await fetchAudioForItem(index);
-      
-      const audioBytes = base64ToUint8Array(audioB64);
-      const audioBuffer = await decodeAudioData(audioBytes, audioContext);
-      
+
+      let audioBuffer: AudioBuffer;
+      try {
+        const audioBytes = base64ToUint8Array(audioB64);
+        audioBuffer = await decodeAudioData(audioBytes, audioContext);
+      } catch (decodeErr: any) {
+        throw new DetailedApiError({
+          operation: `音声デコード (${item.lang === 'ja' ? '日本語' : '英語'})`,
+          failedStep: '音声データのデコード (Web Audio API)',
+          summary: '取得した音声データの再生準備（デコード）に失敗しました。',
+          steps: [
+            {
+              step: '音声データのデコード (Web Audio API)',
+              status: 'failed',
+              target: `${item.lang} / ${item.voice}`,
+              detail: String(decodeErr?.message || decodeErr),
+            },
+          ],
+          timestamp: new Date().toLocaleTimeString('ja-JP'),
+        });
+      }
+
       if (sourceNodeRef.current) {
           sourceNodeRef.current.onended = null;
           sourceNodeRef.current.stop();
@@ -238,9 +257,13 @@ export const useTextToSpeech = (options?: { onError?: (error: any) => void }) =>
       sourceNode.start(0);
       setPlaybackState('playing');
     } catch (error) {
-      console.error(`Error during playback for item "${item.text.substring(0, 30)}...". Skipping.`, error);
+      console.error(`Error during playback for item "${item.text.substring(0, 30)}...".`, error);
       onErrorRef.current?.(error);
-      // Skip to next on error
+      if (error instanceof DetailedApiError && error.report.needSettings) {
+        stop();
+        return;
+      }
+      // Skip to next on single-item transient error
       playTrack(index + 1);
     }
   }, [stop, initAudioContext, fetchAudioForItem, prefetchNext]);

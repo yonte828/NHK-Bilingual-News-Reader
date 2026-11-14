@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import type { NewsArticle, PlaylistItem } from './types';
+import type { NewsArticle, PlaylistItem, ErrorReport } from './types';
+import { DetailedApiError } from './types';
 import { fetchAndParseRss } from './services/rssService';
 import { translateArticlesBatch } from './services/geminiService';
 import { useTextToSpeech } from './hooks/useTextToSpeech';
@@ -32,50 +33,64 @@ const getInitialArticles = (): NewsArticle[] => {
   return [];
 };
 
-const getFriendlyErrorMessage = (err: any): { message: string; needSettings: boolean } => {
-  const errMsg = err?.message || String(err || '');
-  const lower = errMsg.toLowerCase();
+const toErrorReport = (err: any, fallbackOperation: string): ErrorReport => {
+  if (err instanceof DetailedApiError && err.report) {
+    return err.report;
+  }
 
-  if (errMsg.includes('API_KEY_MISSING') || lower.includes('gemini_api_key_not_configured')) {
-    return {
-      message: 'Gemini APIキーが設定されていません。右上の設定（歯車アイコン）からAPIキーを入力してください。',
-      needSettings: true,
-    };
-  }
-  if (lower.includes('api_key_invalid') || lower.includes('api key not valid') || (lower.includes('400') && lower.includes('key'))) {
-    return {
-      message: '設定されたGemini APIキーが無効です。右上の設定から正しいAPIキーをご確認ください。',
-      needSettings: true,
-    };
-  }
-  if (lower.includes('503') || lower.includes('overloaded') || lower.includes('high demand') || lower.includes('unavailable')) {
-    return {
-      message: 'Geminiサーバーが一時的に混雑しています。少し時間をおいて再度お試しください。',
-      needSettings: false,
-    };
-  }
-  if (lower.includes('resource_exhausted') || lower.includes('429') || lower.includes('quota')) {
-    return {
-      message: 'APIの利用枠上限に達しました。1〜2分待ってから再度お試しください。',
-      needSettings: false,
-    };
-  }
-  if (lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('load failed')) {
-    return {
-      message: 'Gemini APIサーバーへの通信に失敗しました。インターネット接続や広告ブロッカーの設定をご確認ください。',
-      needSettings: false,
-    };
-  }
+  const errMsg = err?.message || String(err || '不明なエラー');
+  const lower = errMsg.toLowerCase();
+  const needSettings =
+    errMsg.includes('API_KEY_MISSING') ||
+    lower.includes('gemini_api_key_not_configured') ||
+    lower.includes('api_key_invalid') ||
+    lower.includes('api key not valid');
+
   return {
-    message: `エラーが発生しました: ${errMsg}`,
-    needSettings: false,
+    operation: fallbackOperation,
+    failedStep: '処理実行中（予期しない例外）',
+    summary: errMsg,
+    needSettings,
+    steps: [
+      {
+        step: fallbackOperation,
+        status: 'failed',
+        detail: errMsg,
+      },
+    ],
+    timestamp: new Date().toLocaleTimeString('ja-JP'),
   };
+};
+
+const formatReportForCopy = (report: ErrorReport): string => {
+  const lines: string[] = [
+    `[NHK News Reader 診断ログ]`,
+    `時刻: ${report.timestamp}`,
+    `処理: ${report.operation}`,
+    `失敗工程: ${report.failedStep}`,
+    `要約: ${report.summary}`,
+    `--- 実行ステップ詳細 ---`,
+  ];
+
+  report.steps.forEach((s, i) => {
+    const tag = s.status === 'success' ? 'OK' : s.status === 'failed' ? 'NG' : 'SKIP';
+    const metaParts: string[] = [];
+    if (s.httpStatus !== undefined) metaParts.push(`HTTP ${s.httpStatus}`);
+    if (s.durationMs !== undefined) metaParts.push(`${s.durationMs}ms`);
+    const meta = metaParts.length > 0 ? ` (${metaParts.join(', ')})` : '';
+    lines.push(`${i + 1}. [${tag}] ${s.step}${meta}`);
+    if (s.target) lines.push(`   接続先: ${s.target}`);
+    if (s.detail) lines.push(`   詳細: ${s.detail}`);
+  });
+
+  return lines.join('\n');
 };
 
 const App: React.FC = () => {
   const [articles, setArticles] = useState<NewsArticle[]>(getInitialArticles);
   const [isLoading, setIsLoading] = useState<boolean>(articles.length === 0);
-  const [error, setError] = useState<string | null>(null);
+  const [errorReport, setErrorReport] = useState<ErrorReport | null>(null);
+  const [copiedLog, setCopiedLog] = useState<boolean>(false);
   const [translatingId, setTranslatingId] = useState<string | null>(null);
   const [isTranslatingAll, setIsTranslatingAll] = useState<boolean>(false);
   const [allTranslated, setAllTranslated] = useState<boolean>(false);
@@ -102,9 +117,10 @@ const App: React.FC = () => {
 
   const { play, stop, pause, resume, playbackState, currentItem } = useTextToSpeech({
     onError: (err) => {
-      const friendly = getFriendlyErrorMessage(err);
-      setError(friendly.message);
-      if (friendly.needSettings) {
+      const report = toErrorReport(err, '音声再生・生成');
+      setErrorReport(report);
+      setCopiedLog(false);
+      if (report.needSettings) {
         setIsSettingsOpen(true);
       }
     },
@@ -135,6 +151,32 @@ const App: React.FC = () => {
     }
   }, [articles]);
 
+  const handleCopyErrorLog = async () => {
+    if (!errorReport) return;
+    const text = formatReportForCopy(errorReport);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedLog(true);
+      setTimeout(() => setCopiedLog(false), 2500);
+    } catch {
+      // Fallback for older mobile browsers / non-HTTPS contexts
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        setCopiedLog(true);
+        setTimeout(() => setCopiedLog(false), 2500);
+      } catch (e) {
+        console.error('Copy failed:', e);
+      }
+    }
+  };
+
   const loadNews = useCallback(async (forceRefresh: boolean = false) => {
     if (articles.length > 0 && !forceRefresh) {
       setIsLoading(false);
@@ -142,7 +184,7 @@ const App: React.FC = () => {
     }
 
     setIsLoading(true);
-    setError(null);
+    setErrorReport(null);
     try {
       const newsItems = await fetchAndParseRss();
       setArticles(prevArticles => {
@@ -164,7 +206,8 @@ const App: React.FC = () => {
       });
     } catch (err) {
       console.error(err);
-      setError('NHKニュースフィードの取得に失敗しました。時間をおいて再読み込みしてください。');
+      setErrorReport(toErrorReport(err, 'NHKニュースRSS取得'));
+      setCopiedLog(false);
       setArticles(prev => {
         if (prev.length === 0) {
           localStorage.removeItem(LOCAL_STORAGE_KEY);
@@ -188,7 +231,8 @@ const App: React.FC = () => {
     if (!article) return;
 
     setTranslatingId(articleId);
-    setError(null);
+    setErrorReport(null);
+    setCopiedLog(false);
     try {
       let completedDescription = article.completedDescription;
       let translatedTitle = article.translatedTitle;
@@ -196,7 +240,7 @@ const App: React.FC = () => {
 
       // 1. Complete Japanese & Translate to English in ONE API call
       if (!translatedTitle || !translatedDescription || !completedDescription) {
-        const translatedData = await translateArticlesBatch([article]);
+        const translatedData = await translateArticlesBatch([article], '個別記事翻訳＆補完');
         if (translatedData.length > 0) {
           completedDescription = translatedData[0].completedDescription;
           translatedTitle = translatedData[0].translatedTitle;
@@ -215,7 +259,19 @@ const App: React.FC = () => {
             )
           );
         } else {
-          throw new Error('Translation failed.');
+          throw new DetailedApiError({
+            operation: '個別記事翻訳＆補完',
+            failedStep: '応答データ検証',
+            summary: '記事の翻訳結果が空でした。',
+            steps: [
+              {
+                step: '応答データ検証',
+                status: 'failed',
+                detail: 'APIからの配列結果が0件でした',
+              },
+            ],
+            timestamp: new Date().toLocaleTimeString('ja-JP'),
+          });
         }
       }
 
@@ -239,10 +295,10 @@ const App: React.FC = () => {
 
       play(playlist);
     } catch (err: any) {
-      console.error('handleTranslateAndRead error:', err);
-      const friendly = getFriendlyErrorMessage(err);
-      setError(friendly.message);
-      if (friendly.needSettings) {
+      console.error('handleTranslateAndPlay error:', err);
+      const report = toErrorReport(err, '個別記事翻訳＆再生');
+      setErrorReport(report);
+      if (report.needSettings) {
         setIsSettingsOpen(true);
       }
     } finally {
@@ -254,7 +310,8 @@ const App: React.FC = () => {
     if (isTranslatingAll) return;
 
     setIsTranslatingAll(true);
-    setError(null);
+    setErrorReport(null);
+    setCopiedLog(false);
     const articlesToProcess = articles.filter(
       a => !a.translatedTitle || !a.translatedDescription || !a.completedDescription
     );
@@ -267,10 +324,14 @@ const App: React.FC = () => {
       if (articlesToProcess.length > 0) {
         for (let i = 0; i < articlesToProcess.length; i += TEXT_CHUNK_SIZE) {
           const chunkIndex = Math.floor(i / TEXT_CHUNK_SIZE) + 1;
+          const progressLabel = `チャンク ${chunkIndex}/${totalChunks}`;
           setTranslationProgress(`翻訳＆補完中 ${chunkIndex}/${totalChunks}...`);
 
           const chunk = articlesToProcess.slice(i, i + TEXT_CHUNK_SIZE);
-          const translatedData = await translateArticlesBatch(chunk);
+          const translatedData = await translateArticlesBatch(
+            chunk,
+            `一括翻訳・補完 (${progressLabel})`
+          );
 
           translatedData.forEach(tItem => {
             const idx = localArticles.findIndex(a => a.id === tItem.id);
@@ -293,9 +354,9 @@ const App: React.FC = () => {
       }
     } catch (e: any) {
       console.error('Error in handleTranslateAll:', e);
-      const friendly = getFriendlyErrorMessage(e);
-      setError(friendly.message);
-      if (friendly.needSettings) {
+      const report = toErrorReport(e, '一括翻訳・補完');
+      setErrorReport(report);
+      if (report.needSettings) {
         setIsSettingsOpen(true);
       }
     } finally {
@@ -334,7 +395,19 @@ const App: React.FC = () => {
     });
 
     if (playlist.length === 0) {
-      setError('再生可能な翻訳済み記事がありません。');
+      setErrorReport({
+        operation: 'すべて連続再生',
+        failedStep: 'プレイリスト構築',
+        summary: '再生可能な翻訳済み記事がありません。先に「一括翻訳・補完」を実行してください。',
+        steps: [
+          {
+            step: '翻訳済み記事の確認',
+            status: 'failed',
+            detail: '翻訳済み記事が0件のため再生を開始できませんでした',
+          },
+        ],
+        timestamp: new Date().toLocaleTimeString('ja-JP'),
+      });
       return;
     }
 
@@ -354,7 +427,7 @@ const App: React.FC = () => {
               onClick={() => setIsSettingsOpen(true)}
               className="p-2 rounded-full hover:bg-white/20 transition-colors"
               aria-label="Settings"
-              title="設定 (APIキー入力)"
+              title="設定 (APIキー入力・接続テスト)"
             >
               <SettingsIcon className="h-6 w-6" />
             </button>
@@ -416,17 +489,119 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {error && (
+        {errorReport && (
           <div
-            className="bg-red-100 dark:bg-red-900/50 border-l-4 border-red-500 text-red-700 dark:text-red-200 p-4 rounded-md shadow-md mb-6"
+            className="bg-red-50 dark:bg-red-950/40 border-l-4 border-red-500 text-red-900 dark:text-red-100 p-4 rounded-md shadow-md mb-6"
             role="alert"
           >
-            <div className="flex items-center">
-              <ErrorIcon />
-              <div className="ml-3">
-                <p className="font-bold">エラーが発生しました</p>
-                <p className="text-sm">{error}</p>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3 min-w-0 flex-1">
+                <div className="shrink-0 mt-0.5 text-red-600 dark:text-red-400">
+                  <ErrorIcon />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-bold text-sm sm:text-base">
+                      {errorReport.operation} でエラーが発生しました
+                    </p>
+                    <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-red-200/70 dark:bg-red-900/60 text-red-900 dark:text-red-200">
+                      失敗工程: {errorReport.failedStep}
+                    </span>
+                    <span className="text-[11px] opacity-70 ml-auto">
+                      {errorReport.timestamp}
+                    </span>
+                  </div>
+
+                  <p className="text-sm mt-1.5 leading-relaxed">{errorReport.summary}</p>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCopyErrorLog}
+                      className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded bg-white dark:bg-gray-800 border border-red-300 dark:border-red-700 text-red-800 dark:text-red-200 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
+                    >
+                      {copiedLog ? '診断ログをコピーしました！' : '診断ログをコピー'}
+                    </button>
+
+                    {errorReport.needSettings && (
+                      <button
+                        type="button"
+                        onClick={() => setIsSettingsOpen(true)}
+                        className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded bg-nhk-red text-white hover:bg-red-700 transition-colors"
+                      >
+                        設定画面を開く（キー確認・テスト）
+                      </button>
+                    )}
+                  </div>
+
+                  {errorReport.steps.length > 0 && (
+                    <div className="mt-4 pt-3 border-t border-red-200 dark:border-red-800/60">
+                      <p className="text-xs font-semibold mb-2 opacity-80">
+                        実行ステップ詳細（{errorReport.steps.length}工程）
+                      </p>
+                      <div className="space-y-1.5 font-mono text-[11px] sm:text-xs">
+                        {errorReport.steps.map((s, idx) => (
+                          <div
+                            key={idx}
+                            className={`p-2 rounded border ${
+                              s.status === 'failed'
+                                ? 'bg-red-100/80 dark:bg-red-900/40 border-red-300 dark:border-red-700'
+                                : s.status === 'success'
+                                ? 'bg-white/80 dark:bg-black/25 border-green-300/70 dark:border-green-800/50'
+                                : 'bg-white/50 dark:bg-black/15 border-gray-300 dark:border-gray-700 opacity-75'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 ${
+                                    s.status === 'failed'
+                                      ? 'bg-red-600 text-white'
+                                      : s.status === 'success'
+                                      ? 'bg-green-600 text-white'
+                                      : 'bg-gray-500 text-white'
+                                  }`}
+                                >
+                                  {s.status === 'failed' ? 'NG' : s.status === 'success' ? 'OK' : 'SKIP'}
+                                </span>
+                                <span className="font-semibold break-words">{s.step}</span>
+                              </div>
+                              {(s.httpStatus !== undefined || s.durationMs !== undefined) && (
+                                <span className="text-[11px] opacity-80 shrink-0">
+                                  {s.httpStatus !== undefined ? `HTTP ${s.httpStatus}` : ''}
+                                  {s.httpStatus !== undefined && s.durationMs !== undefined ? ' · ' : ''}
+                                  {s.durationMs !== undefined ? `${s.durationMs}ms` : ''}
+                                </span>
+                              )}
+                            </div>
+                            {s.target && (
+                              <div className="mt-1 opacity-75 break-all">
+                                接続先: {s.target}
+                              </div>
+                            )}
+                            {s.detail && (
+                              <div className="mt-1 break-words leading-snug">
+                                詳細: {s.detail}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
+
+              <button
+                type="button"
+                onClick={() => setErrorReport(null)}
+                className="text-red-500 hover:text-red-700 dark:text-red-300 dark:hover:text-white p-1 rounded transition-colors shrink-0"
+                aria-label="エラー表示を閉じる"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
           </div>
         )}
